@@ -160,23 +160,27 @@ Buffers: `app_message_open(4096, 1024)` (launcher-verified). One article per mes
 
 ### 4.2 Timeline reading view (user's core requirement)
 
-Replicates native Pebble Timeline: vertical **accent-colored bar on the right edge**,
-a **dot per article** on the bar (accent = unread, muted = read, star glyph variant),
-and an **animated pin** marking the selected entry; up/down flows through entries.
+Paged full-screen article reader in the style of the native Pebble Timeline
+(implemented, modelled on the open-source PebbleOS source
+`coredevices/PebbleOS` — `src/fw/apps/system/timeline/` layer.c (paging),
+relbar.c (spine/pin), animations.c; `src/fw/services/timeline/timeline_layout.c`
+(card metrics); `src/fw/applib/ui/animation_interpolate.c` (easing)):
 
-Implementation (reuse-first, then custom):
-- **Candidate open-source bases [VERIFY at implementation]**: PebbleOS source
-  (`github.com/pebble/pebbleos`, MIT) timeline drawing code; `pebble-sdk-examples`
-  (MIT) for animation idioms; `Neal/Readebble` (Pebble RSS reader) for JS chunked
-  fetching; `Wowfunhappy/Pebble-RSS-Reader` for menu-of-titles patterns. If no
-  timeline layer is liftable, implement as a custom MenuLayer draw: rows render
-  right-aligned against the bar; bar + dots drawn by a full-height sibling Layer
-  behind/over the menu; pin = animated notch (GPath) moved via
-  `property_animation` on selection change; selection highlight cross-fades via the
-  launcher's GColor8-lerp AnimationImplementation (no float math).
-- Row: title (1–2 lines) + feed · relative time (muted, small); left indent for
-  unread dot? No — timeline bar carries state. Starred rows show a filled star glyph
-  (resource ICON_STAR-style, white variant on dark).
+- **One article full screen**: accent header bar (heading + feed·time,
+  black-on-accent, height measured per heading, capped at 2 lines) over a
+  scrollable summary body (ScrollLayer, GOTHIC_18, theme-aware).
+- **Scroll-past-bottom advances**: at the bottom (offset ≥ content − frame) or
+  when the content fits, further DOWN / a touch fling advances to the next
+  article with a two-phase slide — page out to −h (220 ms EaseIn), next
+  article parks below and slides in (220 ms EaseOut). SELECT also advances;
+  last article pulses and stays.
+- **Right-side accent bar**: permanent 4 px accent spine, full height, plus a
+  pin notch gliding to the current article's progress within the loaded window
+  (int-lerp AnimationImplementation, 220 ms ease-in-out).
+- **Star**: long-press SELECT toggles; yellow GPath star in the header.
+- Reimplemented with public SDK APIs only (ScrollLayer, PropertyAnimation,
+  Animation, GPath, TextLayer) — the firmware's own layers/constants were
+  inspected, not linked.
 - Buttons in timeline: UP/DOWN scroll (MenuLayer native); SELECT opens the article
   detail; long-press SELECT toggles star; BACK pops to tree.
 - Mark-read on open: selecting an article from the timeline marks it read only if

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3
+
+- Reading view is now a paged full-screen article reader in the style of the
+  native Pebble Timeline: accent header bar (heading + feed·time), scrollable
+  summary body; scrolling past the bottom advances to the next article with
+  a 220 ms slide transition (ease-in out / ease-out in); permanent accent
+  right-side bar with a gliding progress pin; SELECT also advances, long-press
+  SELECT stars (yellow star in the header)
+- Mechanics modelled on the open-source PebbleOS Timeline app
+  (coredevices/PebbleOS: src/fw/apps/system/timeline/ layer.c + relbar.c +
+  animations.c, src/fw/services/timeline/timeline_layout.c) — reimplemented
+  with public SDK APIs (ScrollLayer, PropertyAnimation, Animation, GPath)
+- Mark-read: first article per the list toggle, advance-reached articles per
+  the detail toggle (both default on)
+
 ## 0.1.2
 
 - Timeline reading view redesigned as the modern native-Timeline look:

@@ -9,14 +9,15 @@ reading view with an accent bar, dots and a pin.
 - **Feed tree** — All unread / Starred streams, nested folders with unread
   badges; open a folder to play **all articles recursively** or dive into a
   single feed
-- **Timeline reading view** — native-Timeline look: permanent accent spine on
-  the right edge, one dot per article (accent = unread, muted = read), yellow
-  star icon on starred entries, animated accent wash + pin + popping dot on
-  the selected row; every row always shows heading + summary; lazy pages
-  (50 articles) fetched only when you scroll near the bottom
-- **Read through** — SELECT marks the article read (per the list toggle) and
-  advances to the next (per the detail toggle); both toggles default on,
-  switch them off to only star articles and leave them unread
+- **Timeline reading view** — one article full screen, Timeline-style: accent
+  header bar with the heading + feed·time, scrollable summary body; scrolling
+  past the bottom slides to the next article (220 ms ease-in/out); permanent
+  accent right-side bar with a gliding progress pin; yellow star in the
+  header for starred articles (long-press SELECT toggles)
+- **Read through** — opening a stream shows the first article full screen;
+  scroll to the bottom (or press SELECT) to advance; articles are marked read
+  on becoming current (list toggle for the first, detail toggle for
+  advances; both default on — switch them off to only star and leave unread)
 - **Star** — long-press SELECT toggles the star; starred articles show a
   yellow star icon
 - **Settings** — UP on the top dots row opens the watch sub-menu: Refresh,
