@@ -226,7 +226,7 @@ function sendTreeNode(nodes, index, generation) {
  * Fetch one item page. On any failure the watch is unblocked with
  * {ItemCont: ''} plus a ResultCode/ResultText error.
  */
-function itemsFlow(stream, cont, n) {
+function itemsFlow(stream, cont, n, unreadOnly) {
   var client = makeClient();
   if (!client) {
     sendItemCont('', itemsGeneration);
@@ -258,7 +258,7 @@ function itemsFlow(stream, cont, n) {
       sendResult(authErr.code, authErr.text);
       return;
     }
-    client.getItems(stream, cont, n, function (err, data) {
+    client.getItems(stream, cont, n, unreadOnly, function (err, data) {
       clearTimeout(guard);
       if (generation !== itemsGeneration || timedOut) {
         return; // stale chain or the guard already reported
@@ -534,11 +534,13 @@ Pebble.addEventListener('appmessage', function (e) {
     var stream = payloadValue(payload, 'ItemStream');
     var cont = payloadValue(payload, 'ItemCont');
     var fetchN = payloadValue(payload, 'FetchN');
+    var unreadOnly = payloadValue(payload, 'UnreadOnly');
     console.log('appmessage: fetching items');
     itemsFlow(
       (stream === undefined || stream === null) ? '' : String(stream),
       (cont === undefined || cont === null) ? '' : String(cont),
-      (fetchN === undefined || fetchN === null) ? DEFAULT_FETCH_N : fetchN
+      (fetchN === undefined || fetchN === null) ? DEFAULT_FETCH_N : fetchN,
+      !(unreadOnly === undefined || unreadOnly === null || unreadOnly === 0)
     );
     return;
   }

@@ -19,10 +19,11 @@
 #define SPINE_W 4        // accent spine width
 #define PIN_W 11         // pin notch: base..apex (apex sits on the spine)
 #define PIN_H 10
+#define TOP_BAR_H 24     // accent top bar showing the folder/feed name
 #define HEADER_FLOOR 52  // minimum header height
 #define HEADER_META_H 22 // feed·time line + padding below the heading
 #define HEADING_MAX_H 42 // two GOTHIC_18 lines
-#define STAR_PAD 20      // right-side room for the star icon in the heading box
+#define STAR_PAD 26      // right-side room for the star icon in the heading box
 
 static Article s_articles[MAX_ARTICLES];
 static int32_t s_count;
@@ -39,9 +40,12 @@ static GPoint s_last_offset; // last scroll offset seen
 
 static int16_t s_win_w;
 static int16_t s_win_h;
+static int16_t s_view_h; // container height (window minus the top bar)
 static int16_t s_header_h; // dynamic per article
 
 static Window *s_tl_window;
+static Layer *s_top_bar;   // accent top bar with the stream name (static)
+static TextLayer *s_top_text;
 static Layer *s_container;   // holds every page surface; slides on advance
 static Layer *s_header_bar;  // accent header (dynamic height)
 static ScrollLayer *s_scroll; // summary body
@@ -50,13 +54,13 @@ static Layer *s_spine;       // 4 px accent bar, full window height
 static Layer *s_pin;         // progress notch on the spine
 static TextLayer *s_status;  // full-screen "Loading..." / "No articles"
 
-// Shared draw path: a 5-point star (~14 px), drawn in the header when the
+// Shared draw path: a 5-point star (~16 px), drawn in the header when the
 // current article is starred.
 static const GPathInfo STAR_PATH_INFO = {
   .num_points = 10,
   .points = (GPoint[10]){
-    { 0, -7 }, { 2, -2 }, { 7, -2 }, { 4, 1 }, { 5, 7 },
-    { 0, 4 }, { -5, 7 }, { -3, 1 }, { -7, -2 }, { -2, -2 },
+    { 0, -8 }, { 2, -2 }, { 8, -2 }, { 5, 1 }, { 6, 8 },
+    { 0, 4 }, { -6, 8 }, { -5, 1 }, { -8, -2 }, { -2, -2 },
   },
 };
 
@@ -82,6 +86,7 @@ static GPath *s_pin_gpath;
 static Animation *s_slide_anim;
 static GRect s_slide_from;
 static GRect s_slide_to;
+static int8_t s_slide_dir; // +1 = next (slide up), -1 = previous (slide down)
 
 // Pin glide: an int-lerp of the pin's y within the container (launcher
 // idiom), marking the pin dirty per frame — no float math.
@@ -93,7 +98,8 @@ static Animation *s_pin_anim;
 static void timeline_prefetch_check(void);
 static void article_mark_read(int32_t idx);
 static void maybe_advance(void);
-static void slide_phase1_start(void);
+static void maybe_regress(void);
+static void slide_start(int8_t dir);
 static void load_article_content(void);
 static void pin_reposition(bool glide);
 static void status_update(void);
@@ -146,6 +152,12 @@ static void spine_update(Layer *layer, GContext *ctx) {
   graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 }
 
+//! The accent top bar: solid accent fill (the stream name is a TextLayer).
+static void top_bar_update(Layer *layer, GContext *ctx) {
+  graphics_context_set_fill_color(ctx, s_accent);
+  graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
+}
+
 //! The pin: a small accent notch at the current article's progress, base to
 //! the left, apex on the spine (drawn via a shared GPath — the SDK has no
 //! graphics_fill_triangle).
@@ -188,8 +200,12 @@ static void header_update(Layer *layer, GContext *ctx) {
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
   if (a->star && s_star_path) {
+    // Yellow star with a black outline so it reads on any accent color.
+    gpath_move_to(s_star_path, GPoint(b.size.w - 18, b.size.h / 2));
+    graphics_context_set_stroke_color(ctx, GColorBlack);
+    graphics_context_set_stroke_width(ctx, 2);
+    gpath_draw_outline(ctx, s_star_path);
     graphics_context_set_fill_color(ctx, GColorYellow);
-    gpath_move_to(s_star_path, GPoint(b.size.w - 15, b.size.h / 2));
     gpath_draw_filled(ctx, s_star_path);
   }
 }
@@ -247,13 +263,13 @@ static void pin_reposition(bool glide) {
     return;
   }
   int32_t den = s_count > 0 ? s_count : 1;
-  int32_t body_h = s_win_h - s_header_h;
+  int32_t body_h = s_view_h - s_header_h;
   int32_t y = s_header_h + (body_h - 14) * (s_idx + 1) / den;
   if (y < s_header_h) {
     y = s_header_h;
   }
-  if (y > s_win_h - PIN_H) {
-    y = s_win_h - PIN_H;
+  if (y > s_view_h - PIN_H) {
+    y = s_view_h - PIN_H;
   }
 
   if (s_pin_anim) {
@@ -299,7 +315,7 @@ static void load_article_content(void) {
   layer_set_frame(s_header_bar, GRect(0, 0, s_win_w, s_header_h));
   layer_mark_dirty(s_header_bar);
 
-  scroll_layer_set_frame(s_scroll, GRect(0, s_header_h, s_win_w, s_win_h - s_header_h));
+  scroll_layer_set_frame(s_scroll, GRect(0, s_header_h, s_win_w, s_view_h - s_header_h));
 
   if (s_body) {
     text_layer_destroy(s_body);
@@ -364,42 +380,63 @@ static void maybe_advance(void) {
   }
   s_advance_guard = true;
   s_advancing = true;
-  slide_phase1_start();
+  slide_start(1);
 }
 
-//! Phase 2 done: the next article is fully on screen; release the
-//! transition lock.
+//! Go back to the previously read article (scroll up past the top); the
+//! newest article has nothing above it.
+static void maybe_regress(void) {
+  if (s_advancing || s_advance_guard) {
+    return;
+  }
+  if (s_count == 0) {
+    return;
+  }
+  if (s_idx <= 0) {
+    vibes_short_pulse(); // already at the newest: nothing above
+    return;
+  }
+  s_advancing = true;
+  slide_start(-1);
+}
+
+//! Phase 2 done: the new article is fully on screen; release the transition
+//! lock and the per-article advance guard.
 static void slide_phase2_stopped(Animation *anim, bool finished, void *context) {
   if (anim != s_slide_anim) {
     return;
   }
   s_slide_anim = NULL;
   s_advancing = false;
-  layer_set_frame(s_container, GRect(0, 0, s_win_w, s_win_h));
+  s_advance_guard = false;
+  layer_set_frame(s_container, GRect(0, TOP_BAR_H, s_win_w, s_view_h));
 }
 
-//! Phase 1 done: the old article has slid out. Load the next article's data
-//! into the header/body, park the container below the window and slide it in
-//! (phase 2).
+//! Phase 1 done: the old article has slid out. Load the next/previous
+//! article's data into the header/body, park the container off-screen on
+//! the opposite side and slide it in (phase 2).
 static void slide_phase1_stopped(Animation *anim, bool finished, void *context) {
   if (anim != s_slide_anim) {
     return;
   }
   s_slide_anim = NULL;
 
-  s_idx++;
+  s_idx += s_slide_dir;
   load_article_content();
-  s_advance_guard = false;
-  if (s_mark_detail) {
-    article_mark_read(s_idx);
+  if (s_slide_dir > 0) {
+    // Advancing into an article marks it read per the detail toggle;
+    // going back never marks anything.
+    if (s_mark_detail) {
+      article_mark_read(s_idx);
+    }
   }
   pin_reposition(true); // glide to the new progress
   timeline_prefetch_check();
 
-  layer_set_frame(s_container, GRect(0, s_win_h, s_win_w, s_win_h));
+  layer_set_frame(s_container, GRect(0, TOP_BAR_H + s_slide_dir * s_view_h, s_win_w, s_view_h));
 
   s_slide_from = layer_get_frame(s_container);
-  s_slide_to = GRect(0, 0, s_win_w, s_win_h);
+  s_slide_to = GRect(0, TOP_BAR_H, s_win_w, s_view_h);
   s_slide_anim = (Animation *)property_animation_create_layer_frame(s_container, &s_slide_to, &s_slide_from);
   animation_set_duration(s_slide_anim, 220);
   animation_set_curve(s_slide_anim, AnimationCurveEaseOut);
@@ -409,16 +446,17 @@ static void slide_phase1_stopped(Animation *anim, bool finished, void *context) 
   animation_schedule(s_slide_anim);
 }
 
-//! Phase 1 of the advance transition: slide the current page up and out
-//! (ease-in, 220 ms).
-static void slide_phase1_start(void) {
+//! Phase 1 of a transition: slide the current page out (ease-in, 220 ms)
+//! in the given direction (+1 up/next, -1 down/previous).
+static void slide_start(int8_t dir) {
   if (s_slide_anim) {
     Animation *old = s_slide_anim;
     s_slide_anim = NULL;
     animation_unschedule(old);
   }
+  s_slide_dir = dir;
   s_slide_from = layer_get_frame(s_container);
-  s_slide_to = GRect(0, -s_win_h, s_win_w, s_win_h);
+  s_slide_to = GRect(0, TOP_BAR_H - dir * s_view_h, s_win_w, s_view_h);
   s_slide_anim = (Animation *)property_animation_create_layer_frame(s_container, &s_slide_to, &s_slide_from);
   animation_set_duration(s_slide_anim, 220);
   animation_set_curve(s_slide_anim, AnimationCurveEaseIn);
@@ -432,13 +470,16 @@ static void slide_phase1_start(void) {
 // Buttons
 // ---------------------------------------------------------------------------
 
-//! UP scrolls the body up; nothing when already at the top.
+//! UP scrolls the body up; past the top it goes back to the previously
+//! read article (still in the ring from this session).
 static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing) {
     return;
   }
   if (scroll_layer_get_content_offset(s_scroll).y > 0) {
     scroll_layer_scroll_up_click_handler(rec, s_scroll);
+  } else {
+    maybe_regress();
   }
 }
 
@@ -519,6 +560,7 @@ static void timeline_window_load(Window *window) {
   GRect bounds = layer_get_bounds(root);
   s_win_w = bounds.size.w;
   s_win_h = bounds.size.h;
+  s_view_h = s_win_h - TOP_BAR_H;
 
   window_set_background_color(window, theme_bg());
 
@@ -528,23 +570,38 @@ static void timeline_window_load(Window *window) {
   s_pin_cur = HEADER_FLOOR;
   s_last_offset = GPointZero;
 
+  // Accent top bar: the folder/feed currently showing its articles. Stays
+  // put while the page below slides.
+  s_top_bar = layer_create(GRect(0, 0, s_win_w, TOP_BAR_H));
+  layer_set_update_proc(s_top_bar, top_bar_update);
+  layer_add_child(root, s_top_bar);
+
+  s_top_text = text_layer_create(GRect(4, 1, s_win_w - 8, TOP_BAR_H - 2));
+  text_layer_set_font(s_top_text, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  text_layer_set_text_alignment(s_top_text, GTextAlignmentLeft);
+  text_layer_set_overflow_mode(s_top_text, GTextOverflowModeTrailingEllipsis);
+  text_layer_set_background_color(s_top_text, GColorClear);
+  text_layer_set_text_color(s_top_text, GColorBlack);
+  text_layer_set_text(s_top_text, s_title);
+  layer_add_child(root, text_layer_get_layer(s_top_text));
+
   // The sliding container holds every page surface; children are positioned
   // relative to it so the whole page moves together during a transition.
-  s_container = layer_create(bounds);
+  s_container = layer_create(GRect(0, TOP_BAR_H, s_win_w, s_view_h));
   layer_add_child(root, s_container);
 
   s_header_bar = layer_create(GRect(0, 0, s_win_w, s_header_h));
   layer_set_update_proc(s_header_bar, header_update);
   layer_add_child(s_container, s_header_bar);
 
-  s_scroll = scroll_layer_create(GRect(0, s_header_h, s_win_w, s_win_h - s_header_h));
+  s_scroll = scroll_layer_create(GRect(0, s_header_h, s_win_w, s_view_h - s_header_h));
   scroll_layer_set_callbacks(s_scroll, (ScrollLayerCallbacks){
     .content_offset_changed_handler = timeline_content_offset_changed,
   });
   scroll_layer_set_shadow_hidden(s_scroll, true);
   layer_add_child(s_container, scroll_layer_get_layer(s_scroll));
 
-  s_spine = layer_create(GRect(s_win_w - SPINE_W - 2, 0, SPINE_W, s_win_h));
+  s_spine = layer_create(GRect(s_win_w - SPINE_W - 2, 0, SPINE_W, s_view_h));
   layer_set_update_proc(s_spine, spine_update);
   layer_add_child(s_container, s_spine);
 
@@ -584,6 +641,8 @@ static void timeline_close(void) {
     animation_unschedule(old);
   }
   s_container = NULL;
+  s_top_bar = NULL;
+  s_top_text = NULL;
   s_header_bar = NULL;
   s_scroll = NULL;
   s_spine = NULL;
@@ -615,6 +674,14 @@ static void timeline_window_unload(Window *window) {
   if (s_header_bar) {
     layer_destroy(s_header_bar);
     s_header_bar = NULL;
+  }
+  if (s_top_text) {
+    text_layer_destroy(s_top_text);
+    s_top_text = NULL;
+  }
+  if (s_top_bar) {
+    layer_destroy(s_top_bar);
+    s_top_bar = NULL;
   }
   if (s_spine) {
     layer_destroy(s_spine);
@@ -808,6 +875,9 @@ void timeline_apply_settings(void) {
   }
   if (s_header_bar) {
     layer_mark_dirty(s_header_bar);
+  }
+  if (s_top_bar) {
+    layer_mark_dirty(s_top_bar);
   }
   if (s_spine) {
     layer_mark_dirty(s_spine);

@@ -15,6 +15,7 @@ extern bool s_dark;
 extern bool s_touch;
 extern bool s_mark_list;     // "Mark read on open (list)" — watch sub-menu toggle
 extern bool s_mark_detail;   // "Mark read on open (detail)" — watch sub-menu toggle
+extern bool s_unread_only;   // "Unread only" — hide read articles from the server
 
 void storage_load(void);
 void storage_save_settings(void);

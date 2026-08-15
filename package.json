@@ -1,7 +1,7 @@
 {
   "name": "pebble-headerss",
   "author": "SHU-red",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "keywords": [
     "pebble-app",
     "freshrss",
@@ -63,7 +63,8 @@
       "DarkMode",
       "TouchEnabled",
       "MarkOnOpenList",
-      "MarkOnOpenDetail"
+      "MarkOnOpenDetail",
+      "UnreadOnly"
     ],
     "resources": {
       "media": [

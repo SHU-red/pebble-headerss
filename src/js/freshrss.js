@@ -453,7 +453,7 @@ function createClient(baseUrl, username, apiPass, opts) {
    * additionally excludes already-read items. Returns
    * {items: [...], continuation: string} — continuation '' means no more.
    */
-  function getItems(stream, cont, n, cb) {
+  function getItems(stream, cont, n, unreadOnly, cb) {
     var enc = encodeStream(stream);
     var count = n || 50;
     var url = base + API_BASE + '/reader/api/0/stream/contents/' + enc +
@@ -461,7 +461,9 @@ function createClient(baseUrl, username, apiPass, opts) {
     if (cont) {
       url += '&c=' + cont;
     }
-    if (String(stream || '') === READING_LIST) {
+    // Unread-only: the reading-list stream always filters; feed/folder
+    // streams filter when the watch's "Unread only" setting is on.
+    if (String(stream || '') === READING_LIST || unreadOnly) {
       url += '&xt=' + READ_TAG;
     }
     request('GET', url, null, function (err, resp) {

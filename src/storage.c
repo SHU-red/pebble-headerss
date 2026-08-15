@@ -13,6 +13,7 @@
 #define PERSIST_KEY_TOUCH 3      // int32: 1 = native touch navigation
 #define PERSIST_KEY_MARK_LIST 4  // int32: 1 = mark read on open (timeline)
 #define PERSIST_KEY_MARK_DETAIL 5 // int32: 1 = mark read on open (detail)
+#define PERSIST_KEY_UNREAD_ONLY 6 // int32: 1 = only fetch unread articles
 #define PERSIST_KEY_TREE_COUNT 10 // int32: number of cached tree nodes
 #define PERSIST_KEY_TREE_BASE 20  // + i: FeedNode blobs (<= 256 B each)
 
@@ -25,6 +26,7 @@ bool s_dark;
 bool s_touch;
 bool s_mark_list;
 bool s_mark_detail;
+bool s_unread_only;
 
 //! 24-bit RGB hex of a GColor8 (2-bit channels scaled up), for flash storage.
 static uint32_t accent_to_hex(GColor c) {
@@ -57,6 +59,10 @@ void storage_load(void) {
   s_mark_detail = persist_exists(PERSIST_KEY_MARK_DETAIL)
                       ? persist_read_int(PERSIST_KEY_MARK_DETAIL) != 0
                       : true;
+  // "Unread only" defaults ON: read articles stay out of the server fetches.
+  s_unread_only = persist_exists(PERSIST_KEY_UNREAD_ONLY)
+                      ? persist_read_int(PERSIST_KEY_UNREAD_ONLY) != 0
+                      : true;
 }
 
 //! Persist every settings toggle. Called after any Clay-delivered change.
@@ -66,6 +72,7 @@ void storage_save_settings(void) {
   persist_write_int(PERSIST_KEY_TOUCH, s_touch ? 1 : 0);
   persist_write_int(PERSIST_KEY_MARK_LIST, s_mark_list ? 1 : 0);
   persist_write_int(PERSIST_KEY_MARK_DETAIL, s_mark_detail ? 1 : 0);
+  persist_write_int(PERSIST_KEY_UNREAD_ONLY, s_unread_only ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------

@@ -18,14 +18,19 @@ reading view with an accent bar, dots and a pin.
   badges; open a folder to play **all articles recursively** or dive into a
   single feed
 - **Timeline reading view** — one article full screen, Timeline-style: accent
-  header bar with the heading + feed·time, scrollable summary body; scrolling
-  past the bottom slides to the next article (220 ms ease-in/out); permanent
-  accent right-side bar with a gliding progress pin; yellow star in the
-  header for starred articles (long-press SELECT toggles)
+  top bar showing the folder/feed, accent header bar with the heading +
+  feed·time, scrollable summary body; scrolling past the bottom slides to the
+  next article (220 ms ease-in/out), scrolling up past the top goes back to
+  previously read articles; permanent accent right-side bar with a gliding
+  progress pin; yellow star with outline in the header for starred articles
+  (long-press SELECT toggles)
 - **Read through** — opening a stream shows the first article full screen;
   scroll to the bottom (or press SELECT) to advance; articles are marked read
   on becoming current (list toggle for the first, detail toggle for
-  advances; both default on — switch them off to only star and leave unread)
+  advances); scroll up past the top to re-open articles marked read this
+  session
+- **Unread only** — watch toggle (sub-menu): hides read articles from the
+  server for feed/folder streams; "All unread" always shows only unread
 - **Star** — long-press SELECT toggles the star; starred articles show a
   yellow star icon
 - **Settings** — UP on the top dots row opens the watch sub-menu: Refresh,

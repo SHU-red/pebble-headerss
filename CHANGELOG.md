@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.4
+
+- Fixed: Clay-delivered accent color was truncated to gray (24-bit RGB was
+  read as a raw GColor8 byte) — now converted properly, the accent shows on
+  the top bar, header, spine and pin
+- Re-introduced the accent top bar: shows the folder/feed currently showing
+  its articles; the page slides beneath it
+- Scrolling up past the top now goes BACK to the previously read article
+  (still in the ring from this session); going back never marks anything
+- Star icon: bigger (16 px) with a black outline so it reads on any accent
+- New watch toggle "Unread only" (sub-menu, default ON): feed/folder streams
+  exclude read articles from the server; "All unread" always filters
+- Article ring raised to 96 on the Time 2 (emery, 128 KB RAM) — 64 on the
+  64 KB platforms — so more read articles stay re-openable in a session
+
 ## 0.1.3
 
 - Reading view is now a paged full-screen article reader in the style of the

@@ -103,6 +103,7 @@ void proto_request_items(const char *stream, const char *cont) {
     dict_write_cstring(iter, MESSAGE_KEY_ItemStream, stream);
     dict_write_cstring(iter, MESSAGE_KEY_ItemCont, cont ? cont : "");
     dict_write_int32(iter, MESSAGE_KEY_FetchN, PAGE_SIZE);
+    dict_write_int32(iter, MESSAGE_KEY_UnreadOnly, s_unread_only ? 1 : 0);
     res = app_message_outbox_send();
   }
   if (res != APP_MSG_OK) {
@@ -217,7 +218,9 @@ void proto_handle_inbox(DictionaryIterator *iter) {
   // message; persist, re-theme and re-arm touch navigation.
   bool settings = false;
   if ((t = dict_find(iter, MESSAGE_KEY_AccentColor))) {
-    s_accent = (GColor){ .argb = (uint8_t)t->value->int32 };
+    // Clay delivers a 24-bit RGB int (launcher convention); the argb
+    // truncation bug turned every non-default accent into gray.
+    s_accent = GColorFromHEX((uint32_t)t->value->int32);
     settings = true;
   }
   if ((t = dict_find(iter, MESSAGE_KEY_DarkMode))) {

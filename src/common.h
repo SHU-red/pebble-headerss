@@ -10,7 +10,14 @@
 // ---------------------------------------------------------------------------
 
 #define MAX_FEED_NODES 64
+//! Article ring-buffer budget: the Time 2 (emery) has 128 KB RAM, the
+//! basalt-class platforms 64 KB — bigger window on the target watch keeps
+//! more read articles re-openable in a session.
+#if defined(PBL_PLATFORM_EMERY)
+#define MAX_ARTICLES 96
+#else
 #define MAX_ARTICLES 64
+#endif
 #define PAGE_SIZE 50
 #define MARK_BATCH_MAX 12
 #define MARK_FLUSH_MS 500
