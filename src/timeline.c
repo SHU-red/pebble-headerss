@@ -27,11 +27,13 @@
 // Sidebar icons: monochrome (inactive = black, active = white — except the
 // highlight M, which uses the shared alarm color), stacked at the top of the
 // full-height sidebar ~10 px apart, starting ~8 px from the very top.
-#define SIDEBAR_ICON_TOP 8  // first icon top (the sidebar starts at y=0)
-#define SIDEBAR_ICON_GAP 10 // vertical gap between the icons
-#define SIDEBAR_EYE_D 16    // read/unread circle diameter
-#define SIDEBAR_STAR_H 18   // star icon height
-#define SIDEBAR_M_H 18      // M badge height (GOTHIC_18_BOLD glyph)
+#define SIDEBAR_ICON_GAP 12 // vertical gap between the indicators
+#define SIDEBAR_DISC_D 20   // read/unread disc diameter
+#define SIDEBAR_HEART_H 20  // fav heart height
+#define SIDEBAR_MAG_H 20    // match magnifier glyph height
+// The indicator column is vertically centered beside the physical SELECT
+// button (right edge, mid-screen): total stack = 20+12+20+12+20 = 84 px.
+#define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 84) / 2)
 
 // Highlight alarm color: the highlight M badge and ALL matched words (body
 // and title) share this one color so the connection is obvious.
@@ -174,17 +176,19 @@ static int32_t s_target_idx;
 static Animation *s_anim_a; // current page slides out
 static Animation *s_anim_b; // spare page slides in
 static GRect s_from_a, s_to_a, s_from_b, s_to_b;
+static AppTimer *s_transition_watchdog; // failsafe: releases a wedged transition
 
-// Shared draw path: a 5-point star (~18 px) drawn in the sidebar.
-static const GPathInfo STAR_PATH_INFO = {
-  .num_points = 10,
-  .points = (GPoint[10]){
-    { 0, -9 }, { 2, -2 }, { 9, -2 }, { 6, 1 }, { 7, 9 },
-    { 0, 5 }, { -7, 9 }, { -6, 1 }, { -9, -2 }, { -2, -2 },
+// Shared draw path: a heart (~20 px) — the favourite indicator in the
+// sidebar. Monochrome: white when starred, black otherwise.
+static const GPathInfo HEART_PATH_INFO = {
+  .num_points = 12,
+  .points = (GPoint[12]){
+    { 0, -7 }, { 3, -9 }, { 7, -8 }, { 9, -4 }, { 8, 1 }, { 4, 6 },
+    { 0, 9 }, { -4, 6 }, { -8, 1 }, { -9, -4 }, { -7, -8 }, { -3, -9 },
   },
 };
 
-static GPath *s_star_path;
+static GPath *s_heart_path;
 
 // Shared draw path: a closed check mark (~16 px) for the all-caught-up
 // status; drawn in accent above the status text.
@@ -282,11 +286,12 @@ static void top_bar_update(Layer *layer, GContext *ctx) {
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 }
 
-//! Thick accent sidebar (full screen height, y = 0..s_win_h) holding the
-//! monochrome icons at the very top: the read/unread dot (filled white =
-//! unread, black = read), the star (white = starred, black = not) and the
-//! highlight-word M badge (the alarm color when the current article matches
-//! a highlight word, plain black otherwise).
+//! Accent sidebar (full screen height, y = 0..s_win_h) holding three
+//! monochrome indicators VERTICALLY CENTERED beside the SELECT button:
+//! read/unread disc (filled white = unread, black = read), favourite heart
+//! (white = starred, black = not) and the highlight-match magnifier (the
+//! alarm color when the current article matches a highlight word, plain
+//! black otherwise).
 static void sidebar_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, s_accent);
@@ -297,26 +302,25 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
     return;
   }
   int16_t cx = b.size.w / 2;
-  int16_t y = SIDEBAR_ICON_TOP;
+  int16_t y = SIDEBAR_ICON_TOP(s_win_h);
 
-  // Read/unread: a plain filled circle — white = unread, black = read.
-  GPoint c = GPoint(cx, y + SIDEBAR_EYE_D / 2);
+  // Read/unread: a plain filled disc — white = unread, black = read.
+  GPoint c = GPoint(cx, y + SIDEBAR_DISC_D / 2);
   graphics_context_set_fill_color(ctx, a->read ? GColorBlack : GColorWhite);
-  graphics_fill_circle(ctx, c, SIDEBAR_EYE_D / 2);
-  y += SIDEBAR_EYE_D + SIDEBAR_ICON_GAP;
+  graphics_fill_circle(ctx, c, SIDEBAR_DISC_D / 2);
+  y += SIDEBAR_DISC_D + SIDEBAR_ICON_GAP;
 
-  // Star: white when starred, black otherwise.
-  if (s_star_path) {
-    GPoint sc = GPoint(cx, y + SIDEBAR_STAR_H / 2);
-    gpath_move_to(s_star_path, sc);
+  // Favourite: a heart — white when starred, black otherwise.
+  if (s_heart_path) {
+    GPoint hc = GPoint(cx, y + SIDEBAR_HEART_H / 2);
+    gpath_move_to(s_heart_path, hc);
     graphics_context_set_fill_color(ctx, a->star ? GColorWhite : GColorBlack);
-    gpath_draw_filled(ctx, s_star_path);
+    gpath_draw_filled(ctx, s_heart_path);
   }
-  y += SIDEBAR_STAR_H + SIDEBAR_ICON_GAP;
+  y += SIDEBAR_HEART_H + SIDEBAR_ICON_GAP;
 
-  // M badge: the current article's page caches whether any highlight word
-  // matches (set when the layouts are built). Active = the alarm color the
-  // matched words are drawn with; inactive = plain black.
+  // Match: a magnifying glass — alarm color when the current article has
+  // highlight-word matches, black otherwise.
   bool matched = false;
   for (int i = 0; i < 2; i++) {
     const Page *pg = &s_pages[i];
@@ -325,10 +329,13 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
       break;
     }
   }
-  graphics_context_set_text_color(ctx, matched ? HL_ALARM_COLOR : GColorBlack);
-  graphics_draw_text(ctx, "M", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-                     GRect(cx - 9, y, 18, SIDEBAR_M_H),
-                     GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+  GColor mag_c = matched ? HL_ALARM_COLOR : GColorBlack;
+  graphics_context_set_stroke_color(ctx, mag_c);
+  graphics_context_set_stroke_width(ctx, 2);
+  GPoint center = GPoint(cx - 1, y + SIDEBAR_MAG_H / 2 - 2);
+  graphics_draw_circle(ctx, center, 6);
+  graphics_draw_line(ctx, GPoint(center.x + 5, center.y + 5),
+                     GPoint(center.x + 9, center.y + 9));
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,12 +1169,38 @@ static void page_destroy(Page *p) {
 // Page transition (continuous two-page slide)
 // ---------------------------------------------------------------------------
 
+//! Failsafe: if a page transition ever wedges (s_advancing stuck — e.g. an
+//! animation the OS never completes or never reports), release the locks so
+//! DOWN/UP/SELECT keep working. The watchdog is armed in transition_to and
+//! cancelled when the transition settles; a healthy 260 ms slide never
+//! reaches it.
+static void transition_watchdog_cb(void *data) {
+  s_transition_watchdog = NULL;
+  if (!s_advancing) {
+    return;
+  }
+  s_advancing = false;
+  s_advance_guard = false;
+  layer_set_frame(cur_page()->root, GRect(0, 0, s_win_w, s_view_h));
+  if (s_sidebar) {
+    layer_mark_dirty(s_sidebar);
+  }
+}
+
+static void transition_watchdog_cancel(void) {
+  if (s_transition_watchdog) {
+    app_timer_cancel(s_transition_watchdog);
+    s_transition_watchdog = NULL;
+  }
+}
+
 //! Transition finished: the target page is fully on screen. Commit the new
 //! index, drain the triage stream (unstar the article we landed on when
 //! advancing inside Starred), drop the old page, release the locks, then
 //! arm the auto-mark timer and fetch the full summary for the settled
 //! article.
 static void transition_finalize(void) {
+  transition_watchdog_cancel();
   s_idx = s_target_idx;
   page_destroy(&s_pages[s_cur]);
   s_cur = 1 - s_cur;
@@ -1212,6 +1245,7 @@ static void transition_anim_stopped(Animation *anim, bool finished, void *contex
   if (finished) {
     transition_finalize();
   } else {
+    transition_watchdog_cancel();
     s_advancing = false;
     s_advance_guard = false;
     layer_set_frame(cur_page()->root, GRect(0, 0, s_win_w, s_view_h));
@@ -1236,6 +1270,8 @@ static void transition_to(int8_t dir) {
   s_dir = dir;
   s_target_idx = nidx;
   mark_timer_cancel(); // leaving the current article: drop its auto-mark
+  transition_watchdog_cancel();
+  s_transition_watchdog = app_timer_register(2000, transition_watchdog_cb, NULL);
 
   int16_t top = 0; // settled y inside the page area (which itself sits below
                    // the progress line + top bar)
@@ -1304,7 +1340,11 @@ static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
 }
 
 //! DOWN scrolls the body; at the bottom (or when it all fits) it advances
-//! to the next article instead.
+//! to the next article instead — EXCEPT while the full summary of the
+//! current article is still loading: the 80-char preview does not fill the
+//! screen, and advancing then would skip the article the user is trying to
+//! read. Stay (scroll is a no-op on the short preview) until the full text
+//! lands and scrolling becomes possible.
 static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing || s_advance_guard) {
     return;
@@ -1313,7 +1353,10 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   GRect frame = layer_get_frame(scroll_layer_get_layer(scroll));
   GSize content = scroll_layer_get_content_size(scroll);
   GPoint offset = scroll_layer_get_content_offset(scroll);
-  if (content.h <= frame.size.h + 2 || offset.y >= content.h - frame.size.h - 2) {
+  bool fetching_here = (s_full_idx == s_idx && s_full_fetching && !s_full_done);
+  if (!fetching_here &&
+      (content.h <= frame.size.h + 2 ||
+       offset.y >= content.h - frame.size.h - 2)) {
     maybe_advance();
   } else {
     scroll_layer_scroll_down_click_handler(rec, scroll);
@@ -1433,7 +1476,7 @@ static void timeline_window_load(Window *window) {
 
   window_set_background_color(window, theme_bg());
 
-  s_star_path = gpath_create(&STAR_PATH_INFO);
+  s_heart_path = gpath_create(&HEART_PATH_INFO);
   s_status_check_path = gpath_create(&CHECK_PATH_INFO);
   s_cur = 0;
   s_pages[0].idx = -1;
@@ -1504,6 +1547,7 @@ static void timeline_window_load(Window *window) {
 static void timeline_close(void) {
   mark_timer_cancel(); // the pending auto-mark must not fire on dead pages
   full_summary_reset(); // free the assembled full text
+  transition_watchdog_cancel();
   proto_flush_now();
   if (s_anim_a) {
     Animation *old = s_anim_a;
@@ -1527,9 +1571,9 @@ static void timeline_close(void) {
 
 static void timeline_window_unload(Window *window) {
   timeline_close();
-  if (s_star_path) {
-    gpath_destroy(s_star_path);
-    s_star_path = NULL;
+  if (s_heart_path) {
+    gpath_destroy(s_heart_path);
+    s_heart_path = NULL;
   }
   if (s_status_check_path) {
     gpath_destroy(s_status_check_path);
@@ -1617,6 +1661,11 @@ void timeline_page_begin(int32_t n) {
       s_count = 0;
       s_idx = 0;
       full_summary_reset(); // everything dropped: the buffered text is gone
+      // The pages' articles were evicted too: mark them inert so they stop
+      // referencing dropped indices (they draw nothing until rebuilt).
+      for (int i = 0; i < 2; i++) {
+        s_pages[i].idx = -1;
+      }
     } else {
       memmove(s_articles, &s_articles[drop],
               (size_t)(s_count - drop) * sizeof(Article));

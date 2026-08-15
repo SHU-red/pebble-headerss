@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.2
+
+- **Stuck reader fixed (three causes)**:
+  1. While the full summary of an article is still loading, the 80-char
+     preview does not fill the screen — DOWN previously *advanced past* the
+     article instead of scrolling. DOWN now never advances while the fetch
+     is in flight for the current article; it scrolls (no-op on the short
+     preview) until the full text lands.
+  2. A transition that wedges (animation never completes/reports) left
+     `s_advancing` locked — DOWN/UP/SELECT all dead. Added a 2 s watchdog:
+     armed per transition, cancelled on settle, force-releases the locks if
+     it ever fires. The reader can no longer lock up.
+  3. The whole-ring-drop path (a page larger than the ring) left the live
+     pages referencing evicted articles — now marked inert instead.
+- **Sidebar indicators redesigned + repositioned**: a column of three
+  monochrome glyphs vertically centered beside the physical SELECT button
+  (right edge, mid-screen): read/unread disc (white = unread, black = read),
+  favourite **heart** (white = starred), match **magnifying glass** (alarm
+  red when highlight words match, black otherwise)
+
 ## 0.3.1 — optimization + reader polish
 
 - **Resource optimization** (from the audit): summary preview 140 → 80
