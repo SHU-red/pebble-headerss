@@ -908,6 +908,8 @@ static void page_resize(Page *p) {
   GSize content = scroll_layer_get_content_size(p->scroll);
   if (content.h != total) {
     scroll_layer_set_content_size(p->scroll, GSize(s_win_w, total));
+    APP_LOG(APP_LOG_LEVEL_INFO, "layout: page idx=%ld content %d -> %d (head %d body %d)",
+            (long)p->idx, content.h, (int)total, hh, (int)p->body_layout.height);
   }
   layer_mark_dirty(p->header);
   layer_mark_dirty(p->body);
@@ -966,6 +968,8 @@ static void full_summary_reset(void) {
 //! the preview stays and DOWN advances again.
 static void full_summary_watchdog_cb(void *data) {
   s_full_watchdog = NULL;
+  APP_LOG(APP_LOG_LEVEL_INFO, "fetch: WATCHDOG fired (idx %ld len %u)",
+          (long)s_full_idx, (unsigned)s_full_len);
   full_summary_reset();
   if (s_count > 0) {
     Page *p = cur_page();
@@ -1012,16 +1016,24 @@ static void full_summary_request(int32_t idx) {
 //! from the heap buffer and grow the scroll content.
 static void full_summary_apply(void) {
   if (!s_full_done || !s_full_summary) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "apply: skipped (done=%d buf=%d)",
+            (int)s_full_done, s_full_summary != NULL);
     return;
   }
   if (s_full_idx != s_idx || s_count == 0) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "apply: skipped (idx %ld vs s_idx %ld)",
+            (long)s_full_idx, (long)s_idx);
     return; // the reader moved on; the buffer is freed at the next settle
   }
   Page *p = cur_page();
   if (!p->body || p->idx != s_idx) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "apply: skipped (page idx %ld mid-transition)",
+            (long)(p ? p->idx : -1));
     return; // mid-transition: the settled page isn't current yet
   }
   body_relayout(p, s_full_summary);
+  APP_LOG(APP_LOG_LEVEL_INFO, "apply: full text %u bytes -> layout h=%d runs=%u",
+          (unsigned)s_full_len, p->body_layout.height, p->body_layout.n);
 }
 
 //! The full-summary text under the current page was thrown away (stale-race
@@ -1285,6 +1297,8 @@ static void transition_watchdog_cancel(void) {
 static void transition_finalize(void) {
   transition_watchdog_cancel();
   s_idx = s_target_idx;
+  APP_LOG(APP_LOG_LEVEL_INFO, "nav: settle idx=%ld dir=%d", (long)s_idx,
+          (int)s_dir);
   page_destroy(&s_pages[s_cur]);
   s_cur = 1 - s_cur;
   s_advancing = false;
@@ -1392,6 +1406,10 @@ static void maybe_advance(void) {
   if (s_count == 0) {
     return;
   }
+  if (s_idx + 1 >= s_count) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "nav: advance blocked (last article %ld/%ld)",
+            (long)s_idx, (long)s_count);
+  }
   transition_to(1);
 }
 
@@ -1419,6 +1437,7 @@ static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
   }
   ScrollLayer *scroll = cur_page()->scroll;
   GPoint offset = scroll_layer_get_content_offset(scroll);
+  APP_LOG(APP_LOG_LEVEL_INFO, "nav: UP off=%d", offset.y);
   if (offset.y < 0) {
     GRect frame = layer_get_frame(scroll_layer_get_layer(scroll));
     int32_t target = offset.y + (frame.size.h - 24);
@@ -1437,6 +1456,8 @@ static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
 //! article); scrolling is a no-op on the preview.
 static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing || s_advance_guard) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "nav: DOWN ignored (count=%ld adv=%d guard=%d)",
+            (long)s_count, (int)s_advancing, (int)s_advance_guard);
     return;
   }
   ScrollLayer *scroll = cur_page()->scroll;
@@ -1448,6 +1469,10 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   // at the very bottom. "At the bottom" is offset.y <= frame.h-content.h.
   bool at_bottom = (offset.y <= frame.size.h - content.h + 2);
   bool fetching_here = (s_full_idx == s_idx && s_full_fetching && !s_full_done);
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "nav: DOWN off=%d frame=%d cont=%d bottom=%d fetch=%d",
+          offset.y, frame.size.h, content.h, (int)at_bottom,
+          (int)fetching_here);
   if (fetching_here) {
     return; // hold: the full text is on its way; do not skip the article
   }
@@ -1464,6 +1489,7 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   if (target < min_y) {
     target = min_y;
   }
+  APP_LOG(APP_LOG_LEVEL_INFO, "nav: page-down %d -> %d", offset.y, (int)target);
   scroll_layer_set_content_offset(scroll, GPoint(0, target), true);
 }
 
