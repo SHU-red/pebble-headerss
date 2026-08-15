@@ -60,14 +60,38 @@ static MenuLayer *s_sub_menu;
 static Window *s_mode_window; // auto-mark mode selection (sub-menu -> window)
 static MenuLayer *s_mode_menu;
 
-// Folder marker: a small right-pointing triangle (U+25B6 is not covered by
-// the system fonts), repositioned with gpath_move_to per draw.
-static const GPathInfo ARROW_PATH_INFO = {
-  .num_points = 3,
-  .points = (GPoint[]) { { 0, -4 }, { 0, 4 }, { 8, 0 } },
+// Nav icons: leading glyphs for menu rows (pin = Important, star = Starred,
+// folder = folders, news = feeds; "All articles"/"All unread" get none).
+static const GPathInfo PIN_PATH_INFO = {
+  .num_points = 6,
+  .points = (GPoint[6]){
+    { 0, -7 }, { 4, -3 }, { 3, 2 }, { 0, 7 }, { -3, 2 }, { -4, -3 },
+  },
 };
-
-static GPath *s_arrow_path;
+static const GPathInfo STAR_ICON_INFO = {
+  .num_points = 10,
+  .points = (GPoint[10]){
+    { 0, -7 }, { 2, -2 }, { 7, -2 }, { 3, 1 }, { 5, 7 },
+    { 0, 4 }, { -5, 7 }, { -3, 1 }, { -7, -2 }, { -2, -2 },
+  },
+};
+static const GPathInfo FOLDER_ICON_INFO = {
+  .num_points = 8,
+  .points = (GPoint[8]){
+    { -9, -3 }, { -2, -3 }, { 0, -1 }, { 9, -1 }, { 9, 6 }, { -9, 6 },
+    { -9, -3 }, { -2, -1 },
+  },
+};
+static const GPathInfo NEWS_ICON_INFO = {
+  .num_points = 6,
+  .points = (GPoint[6]){
+    { -5, -7 }, { 5, -7 }, { 7, -5 }, { 7, 7 }, { -7, 7 }, { -7, -5 },
+  },
+};
+static GPath *s_icon_pin;
+static GPath *s_icon_star;
+static GPath *s_icon_folder;
+static GPath *s_icon_news;
 
 static void push_folder_window(const char *id, const char *name);
 static void push_submenu_window(void);
@@ -438,14 +462,7 @@ static int16_t main_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index
   return cell_index->row == 0 ? 15 : 46;
 }
 
-//! Permanent accent spine on the right edge (Timeline style); on the accent
-//! selection row it inverts to black so it stays visible.
-static void draw_spine(GContext *ctx, GRect b, bool selected) {
-  graphics_context_set_fill_color(ctx, selected ? GColorBlack : s_accent);
-  graphics_fill_rect(ctx, GRect(b.size.w - 6, 0, 4, b.size.h), 0, GCornerNone);
-}
-
-#define NEW_PILL_W 36 // "NEW" marker pill width
+//! Right-aligned unread badge as a filled accent pill (black count); on the
 
 //! Width of the unread badge pill for a count (digits * 8 + padding); 0 when
 //! nothing would be drawn.
@@ -483,6 +500,8 @@ static void draw_badge(GContext *ctx, GRect b, int32_t unread, bool selected,
 
 //! NEW-dot: a feed row with unread > 0 whose tree newest (seconds) is newer
 //! than the stored last-seen for that feed shows an accent "NEW" pill.
+#define NEW_PILL_W 36 // "NEW" marker pill width
+
 static bool new_pill_active(const FeedNode *node) {
   if (!setting_newdot() || !node || node->kind != 2 || node->unread <= 0) {
     return false;
@@ -508,14 +527,37 @@ static void draw_new_pill(GContext *ctx, GRect b, bool selected,
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
-//! Folder marker: small right-pointing triangle; feeds/specials get none.
-static void draw_folder_marker(GContext *ctx, GRect b, bool selected) {
-  if (!s_arrow_path) {
-    return;
+//! Leading nav icon: pin = Important (NULL node = the synthetic row), star =
+//! Starred, folder = folders, news = feeds; "All unread"/"All articles" get
+//! none. Returns the text offset (icon + gap when drawn, else the base x).
+//! The news glyph gets two text lines "cut out" in the row background color.
+static int16_t draw_nav_icon(GContext *ctx, const FeedNode *node,
+                             int16_t text_x, int16_t cy, GColor color,
+                             GColor bg) {
+  GPath *p = NULL;
+  if (!node) {
+    p = s_icon_pin;
+  } else if (node->kind == 2) {
+    p = s_icon_news;
+  } else if (node->kind == 1) {
+    p = s_icon_folder;
+  } else if (strcmp(node->id, "user/-/state/com.google/starred") == 0) {
+    p = s_icon_star;
   }
-  graphics_context_set_fill_color(ctx, selected ? GColorBlack : s_accent);
-  gpath_move_to(s_arrow_path, GPoint(12, b.size.h / 2));
-  gpath_draw_filled(ctx, s_arrow_path);
+  if (!p) {
+    return text_x;
+  }
+  GPoint c = GPoint(text_x + 8, cy);
+  graphics_context_set_fill_color(ctx, color);
+  gpath_move_to(p, c);
+  gpath_draw_filled(ctx, p);
+  if (p == s_icon_news) {
+    graphics_context_set_stroke_color(ctx, bg);
+    graphics_context_set_stroke_width(ctx, 2);
+    graphics_draw_line(ctx, GPoint(c.x - 4, c.y - 1), GPoint(c.x + 4, c.y - 1));
+    graphics_draw_line(ctx, GPoint(c.x - 4, c.y + 2), GPoint(c.x + 4, c.y + 2));
+  }
+  return text_x + 24;
 }
 
 static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
@@ -551,15 +593,12 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
   // Row background: accent when selected, theme otherwise.
   graphics_context_set_fill_color(ctx, selected ? s_accent : theme_bg());
   graphics_fill_rect(ctx, b, 0, GCornerNone);
-  draw_spine(ctx, b, selected);
 
-  // tree_row < 0 is the synthetic Important row (no badge, no marker).
+  // tree_row < 0 is the synthetic Important row (pin icon, no badge).
   const FeedNode *node = tree_row >= 0 ? tree_root_node(tree_row) : NULL;
-  int16_t text_x = 8;
-  if (node && node->kind == 1) {
-    draw_folder_marker(ctx, b, selected);
-    text_x = 20;
-  }
+  int16_t text_x = draw_nav_icon(ctx, node, 8, b.size.h / 2,
+                                 selected ? GColorBlack : theme_fg(),
+                                 selected ? s_accent : theme_bg());
 
   const char *label = "Important";
   if (node) {
@@ -728,20 +767,17 @@ static void folder_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
 
   graphics_context_set_fill_color(ctx, selected ? s_accent : theme_bg());
   graphics_fill_rect(ctx, b, 0, GCornerNone);
-  draw_spine(ctx, b, selected);
 
   const char *label;
   int32_t unread;
-  int16_t text_x = 8;
   const FeedNode *node = NULL;
 
   if (cell_index->row == 0) {
-    // "All articles": the folder's own stream id opens the recursive listing.
+    // "All articles": the folder's own stream id opens the recursive
+    // listing. No icon.
     label = "All articles";
     const FeedNode *f = tree_find(s_folder_id);
     unread = f ? f->unread : 0;
-    draw_folder_marker(ctx, b, selected);
-    text_x = 20;
   } else {
     node = tree_child_node(s_folder_id, cell_index->row - 1);
     if (!node) {
@@ -749,11 +785,10 @@ static void folder_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
     }
     label = node->name[0] ? node->name : node->id;
     unread = node->unread;
-    if (node->kind == 1) {
-      draw_folder_marker(ctx, b, selected);
-      text_x = 20;
-    }
   }
+  int16_t text_x = draw_nav_icon(ctx, node, 8, b.size.h / 2,
+                                 selected ? GColorBlack : theme_fg(),
+                                 selected ? s_accent : theme_bg());
 
   bool np = node && new_pill_active(node);
   graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_fg());
@@ -860,9 +895,6 @@ static uint16_t sub_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
 
 static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
                          void *callback_context) {
-  GRect b = layer_get_bounds(cell_layer);
-  bool selected = menu_layer_is_index_selected(s_sub_menu, (MenuIndex *)cell_index);
-  draw_spine(ctx, b, selected);
   if (cell_index->row == 0) {
     menu_cell_basic_draw(ctx, cell_layer, "Refresh",
                          "Reload feeds from the server", NULL);
@@ -1004,7 +1036,6 @@ static void mode_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
 
   graphics_context_set_fill_color(ctx, selected ? s_accent : theme_bg());
   graphics_fill_rect(ctx, b, 0, GCornerNone);
-  draw_spine(ctx, b, selected);
 
   graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_fg());
   graphics_draw_text(ctx, s_mark_mode_labels[cell_index->row],
@@ -1172,7 +1203,10 @@ static void init(void) {
   storage_load();
   proto_init(); // registers handlers + app_message_open(4096, 1024)
 
-  s_arrow_path = gpath_create(&ARROW_PATH_INFO);
+  s_icon_pin = gpath_create(&PIN_PATH_INFO);
+  s_icon_star = gpath_create(&STAR_ICON_INFO);
+  s_icon_folder = gpath_create(&FOLDER_ICON_INFO);
+  s_icon_news = gpath_create(&NEWS_ICON_INFO);
 
   // Native touch navigation, only when the user enables it in settings.
   (void)app_touch_navigation_enable(s_touch);
@@ -1190,9 +1224,21 @@ static void init(void) {
 }
 
 static void deinit(void) {
-  if (s_arrow_path) {
-    gpath_destroy(s_arrow_path);
-    s_arrow_path = NULL;
+  if (s_icon_pin) {
+    gpath_destroy(s_icon_pin);
+    s_icon_pin = NULL;
+  }
+  if (s_icon_star) {
+    gpath_destroy(s_icon_star);
+    s_icon_star = NULL;
+  }
+  if (s_icon_folder) {
+    gpath_destroy(s_icon_folder);
+    s_icon_folder = NULL;
+  }
+  if (s_icon_news) {
+    gpath_destroy(s_icon_news);
+    s_icon_news = NULL;
   }
   if (s_main_window) {
     window_destroy(s_main_window);

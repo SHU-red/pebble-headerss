@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.4 — navigation
+
+- The accent right spine is gone from every menu (root, folder, sub-menu,
+  context) — it carried no information next to the unread badges
+- Leading nav icons in the root and folder menus, drawn in the row color:
+  Important = **pin**, Starred = **star**, folders = **folder**, feeds =
+  **news** (a document glyph); "All unread" / "All articles" get no icon.
+  The old folder triangle marker is replaced by the folder icon
+
 ## 0.3.3
 
 - **Starred badge now shows the real star count** (it was hardcoded 0): the
