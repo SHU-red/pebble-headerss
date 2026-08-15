@@ -1480,10 +1480,21 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
     maybe_advance();
     return;
   }
-  // Page-down: one viewport per press (a small overlap keeps the previous
+  int32_t scrollable = content.h - frame.size.h;
+  if (scrollable <= 32) {
+    // The article is effectively one screen (e.g. a short summary whose text
+    // just grazes the viewport bottom): an invisible 10 px micro-scroll then
+    // a forced advance reads as "nothing happened, then next article". Treat
+    // it as a single screen — the first DOWN advances cleanly.
+    APP_LOG(APP_LOG_LEVEL_INFO, "nav: one-screen article (scrollable %d), advance",
+            (int)scrollable);
+    maybe_advance();
+    return;
+  }
+  // Page-down: ~3/4 viewport per press (a small overlap keeps the previous
   // screen's last line visible for context); the final press lands exactly
   // on the bottom so the last word is clearly visible.
-  int32_t step = frame.size.h - 24;
+  int32_t step = (frame.size.h * 3) / 4;
   int32_t target = offset.y - step;
   int32_t min_y = frame.size.h - content.h;
   if (target < min_y) {

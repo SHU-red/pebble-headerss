@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.3.13
+## 0.3.15
+
+- **DOWN behavior for one-screen articles**: articles whose full text just
+  grazes the viewport bottom (≤32 px of scrollable range) are treated as a
+  single screen — the first DOWN advances cleanly instead of performing an
+  invisible ~10 px micro-scroll that read as "nothing happened, then next
+  article". Genuinely long articles keep the ~3/4-viewport page-scroll per
+  press. (Diagnostics confirmed the reader logic was correct: the tested
+  articles' full summaries were 113–126 bytes — one screen tall — so there
+  was nothing to scroll.)
+
+## 0.3.14
 
 - **THE full-text cutoff — root cause fixed**: the highlight layout's run
   table was capped at 24 runs (~8 lines). A full summary needs hundreds of
