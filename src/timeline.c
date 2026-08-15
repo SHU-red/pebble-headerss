@@ -898,7 +898,15 @@ static void body_update(Layer *layer, GContext *ctx) {
 //! "Loading full text..." hint when a fetch is in flight.
 static void page_resize(Page *p) {
   int16_t hh = (int16_t)(p->head_layout.height + HEADER_META_H);
-  int16_t body_h = p->body_layout.height + 6; // 2 px pad + 4 px air
+  // Scroll air: a full readable margin below the text (a real reader always
+  // has room under the last line). This guarantees EVERY article — even a
+  // two-line summary under a tall heading — has a visible scroll range, so
+  // the last words are always scrolled fully into view before DOWN advances.
+  int16_t air = s_view_h - 40;
+  if (air < 60) {
+    air = 60;
+  }
+  int16_t body_h = p->body_layout.height + 6 + air;
   if (p->idx == s_full_idx && s_full_fetching && !s_full_done) {
     body_h += FULL_HINT_H;
   }
@@ -908,8 +916,9 @@ static void page_resize(Page *p) {
   GSize content = scroll_layer_get_content_size(p->scroll);
   if (content.h != total) {
     scroll_layer_set_content_size(p->scroll, GSize(s_win_w, total));
-    APP_LOG(APP_LOG_LEVEL_INFO, "layout: page idx=%ld content %d -> %d (head %d body %d)",
-            (long)p->idx, content.h, (int)total, hh, (int)p->body_layout.height);
+    APP_LOG(APP_LOG_LEVEL_INFO, "layout: page idx=%ld content %d -> %d (head %d body %d air %d)",
+            (long)p->idx, content.h, (int)total, hh,
+            (int)p->body_layout.height, air);
   }
   layer_mark_dirty(p->header);
   layer_mark_dirty(p->body);
@@ -1477,17 +1486,6 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
     return; // hold: the full text is on its way; do not skip the article
   }
   if (at_bottom) {
-    maybe_advance();
-    return;
-  }
-  int32_t scrollable = content.h - frame.size.h;
-  if (scrollable <= 32) {
-    // The article is effectively one screen (e.g. a short summary whose text
-    // just grazes the viewport bottom): an invisible 10 px micro-scroll then
-    // a forced advance reads as "nothing happened, then next article". Treat
-    // it as a single screen — the first DOWN advances cleanly.
-    APP_LOG(APP_LOG_LEVEL_INFO, "nav: one-screen article (scrollable %d), advance",
-            (int)scrollable);
     maybe_advance();
     return;
   }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.16
+
+- **Every article scrolls**: the body now carries ~160 px of scroll air
+  below the text (a real reader margin). Even a two-line summary under a
+  tall heading has a visible scroll range, so the last line is always
+  scrolled fully into view before DOWN advances — no more half-cut final
+  lines and no "advance as if it were short". The one-screen heuristic
+  (0.3.15) is removed; DOWN page-scrolls (~3/4 viewport) and advances at
+  the true bottom.
+
 ## 0.3.15
 
 - **DOWN behavior for one-screen articles**: articles whose full text just
