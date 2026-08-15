@@ -544,6 +544,14 @@ static void draw_new_pill(GContext *ctx, GRect b, bool selected,
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
+//! Thin group divider line at the bottom of a menu row (muted color).
+static void draw_menu_divider(GContext *ctx, GRect b) {
+  graphics_context_set_stroke_color(ctx, theme_muted());
+  graphics_context_set_stroke_width(ctx, 2);
+  graphics_draw_line(ctx, GPoint(0, b.size.h - 1),
+                     GPoint(b.size.w, b.size.h - 1));
+}
+
 //! Leading nav icon: pin = Important (NULL node = the synthetic row), star =
 //! Starred, folder = folders, news = feeds; "All unread"/"All articles" get
 //! none. Returns the text offset (icon + gap when drawn, else the base x).
@@ -631,6 +639,13 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
   if (node) {
     draw_new_pill(ctx, b, selected, node, badge_width(node->unread) + 4);
     draw_badge(ctx, b, node->unread, selected, np ? NEW_PILL_W + 4 : 0);
+  }
+
+  // Group dividers: below "All unread" and below the Important row (the
+  // specials end there; the folder/feed area starts underneath).
+  if ((node && node->kind == 0 &&
+       strcmp(node->id, READING_LIST_STREAM) == 0) || tree_row < 0) {
+    draw_menu_divider(ctx, b);
   }
 }
 
@@ -818,6 +833,11 @@ static void folder_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
     draw_new_pill(ctx, b, selected, node, badge_width(node->unread) + 4);
   }
   draw_badge(ctx, b, unread, selected, np ? NEW_PILL_W + 4 : 0);
+
+  // Group divider below "All articles" (the folder/feed rows start after).
+  if (cell_index->row == 0) {
+    draw_menu_divider(ctx, b);
+  }
 }
 
 static void folder_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,

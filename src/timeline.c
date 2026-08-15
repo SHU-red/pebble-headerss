@@ -296,11 +296,11 @@ static void divider_update(Layer *layer, GContext *ctx) {
 }
 
 //! Accent sidebar (full screen height, y = 0..s_win_h) holding three
-//! monochrome indicators VERTICALLY CENTERED beside the SELECT button:
-//! read/unread disc (filled white = unread, black = read), favourite heart
-//! (white = starred, black = not) and the highlight-match magnifier (the
-//! alarm color when the current article matches a highlight word, plain
-//! black otherwise).
+//! indicators VERTICALLY CENTERED beside the SELECT button, in the order
+//! star, circle, magnifier: favourite star (orange = starred, black = not),
+//! read/unread disc (filled white = unread, black = read) and the
+//! highlight-match magnifier (the alarm color when the current article
+//! matches a highlight word, plain black otherwise).
 static void sidebar_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, s_accent);
@@ -313,13 +313,7 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
   int16_t cx = b.size.w / 2;
   int16_t y = SIDEBAR_ICON_TOP(s_win_h);
 
-  // Read/unread: a plain filled disc — white = unread, black = read.
-  GPoint c = GPoint(cx, y + SIDEBAR_DISC_D / 2);
-  graphics_context_set_fill_color(ctx, a->read ? GColorBlack : GColorWhite);
-  graphics_fill_circle(ctx, c, SIDEBAR_DISC_D / 2);
-  y += SIDEBAR_DISC_D + SIDEBAR_ICON_GAP;
-
-  // Favourite: a star — orange when starred, black otherwise.
+  // 1. Favourite: a star — orange when starred, black otherwise.
   if (s_star_path) {
     GPoint sc = GPoint(cx, y + SIDEBAR_STAR_H / 2);
     gpath_move_to(s_star_path, sc);
@@ -328,7 +322,13 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
   }
   y += SIDEBAR_STAR_H + SIDEBAR_ICON_GAP;
 
-  // Match: a magnifying glass — alarm color when the current article has
+  // 2. Read/unread: a plain filled disc — white = unread, black = read.
+  GPoint c = GPoint(cx, y + SIDEBAR_DISC_D / 2);
+  graphics_context_set_fill_color(ctx, a->read ? GColorBlack : GColorWhite);
+  graphics_fill_circle(ctx, c, SIDEBAR_DISC_D / 2);
+  y += SIDEBAR_DISC_D + SIDEBAR_ICON_GAP;
+
+  // 3. Match: a magnifying glass — alarm color when the current article has
   // highlight-word matches, black otherwise.
   bool matched = false;
   for (int i = 0; i < 2; i++) {

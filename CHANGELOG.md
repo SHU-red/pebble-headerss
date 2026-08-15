@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.8
+
+- **Group dividers** in the menus: a thin muted line below "All unread" and
+  below the Important row in the root menu (the specials are separated from
+  the folder/feed area), and below "All articles" in the folder window
+- **Sidebar indicator order**: star, circle, magnifier (was circle first) —
+  the favourite star sits at the top
+- (The favourite icon is the orange star since 0.3.7 — no heart remains)
+
 ## 0.3.7 — scrollable article unit, orange star, marker highlight
 
 - **The whole heading + summary scroll as one unit**: the accent heading
