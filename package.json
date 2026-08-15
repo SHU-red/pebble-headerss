@@ -1,7 +1,7 @@
 {
   "name": "pebble-headerss",
   "author": "SHU-red",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "keywords": [
     "pebble-app",
     "freshrss",
@@ -40,7 +40,6 @@
       "StarItem",
       "StarOn",
       "MarkAllRead",
-      "FetchSummary",
       "ItemId",
       "RequestConfig",
       "ResultCode",
@@ -64,7 +63,13 @@
       "TouchEnabled",
       "MarkOnOpenList",
       "MarkOnOpenDetail",
-      "UnreadOnly"
+      "UnreadOnly",
+      "FetchUserInfo",
+      "FeedNewest",
+      "ImportantRow",
+      "TriageDrain",
+      "NewDot",
+      "ProgressLine"
     ],
     "resources": {
       "media": [
@@ -72,7 +77,7 @@
           "menuIcon": true,
           "type": "bitmap",
           "name": "IMAGE_MENU_ICON",
-          "file": "images/logo_25.png"
+          "file": "images/menu_icon.png"
         }
       ]
     }

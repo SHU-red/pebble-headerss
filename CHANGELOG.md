@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.0 — smart surface
+
+- **Important row**: dedicated root-menu entry for the FreshRSS priority
+  stream (`user/-/state/org.freshrss/important`), toggleable
+- **NEW-dots**: feeds with articles newer than your last visit get an accent
+  NEW pill; per-feed last-seen persisted, updated when the feed is opened
+  (JS sends per-feed newest timestamps from unread-count and per-page newest
+  from stream/contents)
+- **Newest-first sorting**: feeds sort by newest activity (then unread, then
+  name) within their folder; sub-folders stay above feeds, specials pinned
+- **Per-feed context menu**: long-press SELECT on a feed row → Mark all read
+  (with confirm) or Refresh (re-fetch, open at newest)
+- **Connection info**: shows account name, email, server host and total
+  unread via the GReader user-info + unread-count endpoints
+- **Triage drain** (toggle, default OFF): inside Starred, advancing un-stars
+  the article — star = keep, reading drains the list
+- **Progress line**: static 2 px accent position bar in the reader top bar
+  (toggle, default ON)
+- **All caught up**: empty streams show an accent checkmark screen instead
+  of bare "No articles"
+- **App icon**: new 25 px menu icon (design from resources/store, 48/144 px
+  store assets added); dead `getSummary`/`FetchSummary` removed
+
 ## 0.1.7
 
 - Fixed the page transition: `property_animation_create_layer_frame` takes

@@ -16,14 +16,17 @@
 // ---------------------------------------------------------------------------
 
 #define READING_LIST_STREAM "user/-/state/com.google/reading-list"
+#define STARRED_STREAM "user/-/state/com.google/starred"
+#define IMPORTANT_STREAM "user/-/state/org.freshrss/important"
 
 #define RESULT_DISMISS_MS 1500 // final result auto-dismiss
 #define PULSE_INTERVAL_MS 250  // working dialog animated ellipsis
+#define LONG_SELECT_MS 700     // context menu long-press threshold
 
 // ---------------------------------------------------------------------------
 // Result dialog (built from scratch, launcher pattern: colored background +
 // centered white text + animated ellipsis while working; auto-dismiss for
-// finals; orange confirm and info modes wait for input).
+// finals; orange confirm mode waits for input).
 // ---------------------------------------------------------------------------
 
 static Window *s_dialog_window;
@@ -34,8 +37,8 @@ static AppTimer *s_dismiss_timer;
 static AppTimer *s_pulse_timer;
 static bool s_dialog_active;
 static bool s_dialog_confirm;
-static bool s_dialog_info;
 static bool s_confirm_markall; // the confirm dialog is about Mark all read
+static char s_markall_stream[48]; // stream the confirm targets ("" = reading list)
 static char s_dialog_text_buf[192];
 static char s_working_label[32];
 static uint8_t s_pulse_phase;
@@ -65,6 +68,7 @@ static GPath *s_arrow_path;
 
 static void push_folder_window(const char *id, const char *name);
 static void push_submenu_window(void);
+static void open_context_menu(const FeedNode *feed);
 
 // ---------------------------------------------------------------------------
 // Dialog
@@ -81,16 +85,15 @@ static void dialog_bg_update_proc(Layer *layer, GContext *ctx) {
 }
 
 static void dialog_confirm_select(ClickRecognizerRef rec, void *ctx) {
-  if (s_dialog_info) {
-    return; // info screen: SELECT does nothing, BACK leaves
-  }
   if (s_confirm_markall) {
     // Mark all read: confirm in place — the working dialog repaints this
     // very window, so there is no pop/re-create race on the async unload.
+    const char *stream = s_markall_stream[0] ? s_markall_stream
+                                             : READING_LIST_STREAM;
     s_confirm_markall = false;
     s_dialog_confirm = false;
     dialog_show_working("Marking read");
-    proto_mark_all_read(READING_LIST_STREAM);
+    proto_mark_all_read(stream);
     return;
   }
   if (!s_dialog_confirm) {
@@ -101,10 +104,6 @@ static void dialog_confirm_select(ClickRecognizerRef rec, void *ctx) {
 }
 
 static void dialog_confirm_cancel(ClickRecognizerRef rec, void *ctx) {
-  if (s_dialog_info) {
-    dialog_dismiss_cb(NULL);
-    return;
-  }
   if (!s_dialog_confirm) {
     return;
   }
@@ -176,8 +175,8 @@ static void dialog_create(void) {
   s_dialog_color = GColorGreen;
   layer_add_child(root, s_dialog_bg);
 
-  s_dialog_text = text_layer_create(GRect(8, (bounds.size.h - 100) / 2,
-                                          bounds.size.w - 16, 100));
+  s_dialog_text = text_layer_create(GRect(8, (bounds.size.h - 120) / 2,
+                                          bounds.size.w - 16, 120));
   text_layer_set_font(s_dialog_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   text_layer_set_text_alignment(s_dialog_text, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_dialog_text, GTextOverflowModeWordWrap);
@@ -194,7 +193,6 @@ static void dialog_create(void) {
 static void dialog_prepare(GColor color, const char *text) {
   dialog_cancel_timers();
   s_dialog_confirm = false;
-  s_dialog_info = false;
   s_dialog_color = color;
   layer_mark_dirty(s_dialog_bg);
   text_layer_set_text_color(s_dialog_text, GColorWhite);
@@ -236,16 +234,6 @@ static void dialog_show_confirm_text(const char *text) {
   s_dialog_confirm = true;
 }
 
-//! Orange info screen: stays until BACK.
-static void dialog_show_info(const char *text) {
-  if (!s_dialog_active) {
-    dialog_create();
-  }
-  snprintf(s_dialog_text_buf, sizeof(s_dialog_text_buf), "%s", text ? text : "");
-  dialog_prepare(GColorOrange, s_dialog_text_buf);
-  s_dialog_info = true;
-}
-
 static void dialog_unload(Window *window) {
   dialog_cancel_timers();
   text_layer_destroy(s_dialog_text);
@@ -271,7 +259,9 @@ bool ui_result_active(void) {
 void ui_result(int code, const char *text) {
   if (code == 0) {
     if (s_dialog_active) {
-      dialog_show_final(true, "Done!");
+      // Success: show the phone's ResultText when present (e.g. the
+      // multiline account block from FetchUserInfo), else the generic note.
+      dialog_show_final(true, (text && text[0]) ? text : "Done!");
     }
     return;
   }
@@ -338,7 +328,38 @@ static uint16_t main_get_num_sections(MenuLayer *menu_layer, void *callback_cont
 
 static uint16_t main_total_rows(void) {
   int root = tree_root_count();
-  return (uint16_t)(1 + (root > 0 ? root : 1));
+  // Row 0 is the accent strip; the Important special row (after Starred)
+  // adds one data row when enabled (skipped while the tree is empty).
+  int data = root > 0 ? root : 1;
+  if (setting_important() && root > 0) {
+    data++;
+  }
+  return (uint16_t)(1 + data);
+}
+
+//! Map a root data row (0-based, row 0 = the first tree/special row) to a
+//! tree row index, or -1 for the synthetic Important row (inserted right
+//! after the Starred special; appended at the end when Starred is absent).
+//! Callers must handle the empty tree (root == 0) before using this.
+static int root_data_to_tree(int row) {
+  int root = tree_root_count();
+  if (!setting_important()) {
+    return row;
+  }
+  int insert_at = root; // default: after all tree rows
+  for (int i = 0; i < root; i++) {
+    if (strcmp(tree_root_node(i)->id, STARRED_STREAM) == 0) {
+      insert_at = i + 1;
+      break;
+    }
+  }
+  if (row < insert_at) {
+    return row;
+  }
+  if (row == insert_at) {
+    return -1; // the Important row itself
+  }
+  return row - 1;
 }
 
 static uint16_t main_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
@@ -360,25 +381,65 @@ static void draw_spine(GContext *ctx, GRect b, bool selected) {
   graphics_fill_rect(ctx, GRect(b.size.w - 6, 0, 4, b.size.h), 0, GCornerNone);
 }
 
-//! Right-aligned unread badge as a filled accent pill (black count); on the
-//! accent selection row the pill inverts (black pill, white count).
-static void draw_badge(GContext *ctx, GRect b, int32_t unread, bool selected) {
+#define NEW_PILL_W 36 // "NEW" marker pill width
+
+//! Width of the unread badge pill for a count (digits * 8 + padding); 0 when
+//! nothing would be drawn.
+static int16_t badge_width(int32_t unread) {
   if (unread <= 0) {
-    return;
+    return 0;
   }
-  char num[12];
-  snprintf(num, sizeof(num), "%ld", (long)unread);
   int d = 1;
   int32_t v = unread;
   while ((v /= 10) > 0) {
     d++;
   }
-  int16_t pw = 14 + d * 8; // pill width grows with the digit count
-  GRect pill = GRect(b.size.w - 12 - pw, (b.size.h - 16) / 2, pw, 16);
+  return (int16_t)(14 + d * 8);
+}
+
+//! Right-aligned unread badge as a filled accent pill (black count); on the
+//! accent selection row the pill inverts (black pill, white count). `shift`
+//! moves it left to make room for the NEW-dot marker.
+static void draw_badge(GContext *ctx, GRect b, int32_t unread, bool selected,
+                       int16_t shift) {
+  int16_t pw = badge_width(unread);
+  if (pw <= 0) {
+    return;
+  }
+  char num[12];
+  snprintf(num, sizeof(num), "%ld", (long)unread);
+  GRect pill = GRect(b.size.w - 12 - pw - shift, (b.size.h - 16) / 2, pw, 16);
   graphics_context_set_fill_color(ctx, selected ? GColorBlack : s_accent);
   graphics_fill_rect(ctx, pill, 8, GCornersAll);
   graphics_context_set_text_color(ctx, selected ? GColorWhite : GColorBlack);
   graphics_draw_text(ctx, num, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                     GRect(pill.origin.x, pill.origin.y - 1, pill.size.w, pill.size.h),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
+
+//! NEW-dot: a feed row with unread > 0 whose tree newest (seconds) is newer
+//! than the stored last-seen for that feed shows an accent "NEW" pill.
+static bool new_pill_active(const FeedNode *node) {
+  if (!setting_newdot() || !node || node->kind != 2 || node->unread <= 0) {
+    return false;
+  }
+  int64_t newest_s = node->newest / 1000000;
+  return newest_s > storage_feed_last_seen(node->id);
+}
+
+//! Small accent "NEW" pill, left of the unread badge, same style as the
+//! badge (inverts on the selected row). `shift` = badge width + gap.
+static void draw_new_pill(GContext *ctx, GRect b, bool selected,
+                          const FeedNode *node, int16_t shift) {
+  if (!new_pill_active(node)) {
+    return;
+  }
+  GRect pill = GRect(b.size.w - 12 - NEW_PILL_W - shift,
+                     (b.size.h - 16) / 2, NEW_PILL_W, 16);
+  graphics_context_set_fill_color(ctx, selected ? GColorBlack : s_accent);
+  graphics_fill_rect(ctx, pill, 8, GCornersAll);
+  graphics_context_set_text_color(ctx, selected ? GColorWhite : GColorBlack);
+  graphics_draw_text(ctx, "NEW", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
                      GRect(pill.origin.x, pill.origin.y - 1, pill.size.w, pill.size.h),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
@@ -412,13 +473,13 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
   }
 
   int root = tree_root_count();
-  if (row - 1 >= (uint16_t)root) {
+  if (root == 0) {
     menu_cell_basic_draw(ctx, cell_layer, "No feeds yet",
                          "Open the phone app settings", NULL);
     return;
   }
 
-  const FeedNode *node = tree_root_node(row - 1);
+  int tree_row = root_data_to_tree(row - 1);
   GRect b = layer_get_bounds(cell_layer);
   bool selected = menu_layer_is_index_selected(s_main_menu, (MenuIndex *)cell_index);
 
@@ -427,19 +488,29 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   draw_spine(ctx, b, selected);
 
+  // tree_row < 0 is the synthetic Important row (no badge, no marker).
+  const FeedNode *node = tree_row >= 0 ? tree_root_node(tree_row) : NULL;
   int16_t text_x = 8;
-  if (node->kind == 1) {
+  if (node && node->kind == 1) {
     draw_folder_marker(ctx, b, selected);
     text_x = 20;
   }
 
+  const char *label = "Important";
+  if (node) {
+    label = node->name[0] ? node->name : node->id;
+  }
+  bool np = node && new_pill_active(node);
   graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_fg());
-  graphics_draw_text(ctx, node->name[0] ? node->name : node->id,
-                     fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-                     GRect(text_x, (b.size.h - 22) / 2, b.size.w - text_x - 38, 22),
+  graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                     GRect(text_x, (b.size.h - 22) / 2,
+                           b.size.w - text_x - 38 - (np ? NEW_PILL_W + 4 : 0), 22),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
-  draw_badge(ctx, b, node->unread, selected);
+  if (node) {
+    draw_new_pill(ctx, b, selected, node, badge_width(node->unread) + 4);
+    draw_badge(ctx, b, node->unread, selected, np ? NEW_PILL_W + 4 : 0);
+  }
 }
 
 static void main_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
@@ -450,15 +521,21 @@ static void main_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
     return;
   }
   int root = tree_root_count();
-  if (row - 1 >= (uint16_t)root) {
+  if (root == 0) {
     push_submenu_window(); // empty state routes to the sub-menu too
     return;
   }
-  const FeedNode *node = tree_root_node(row - 1);
+  int tree_row = root_data_to_tree(row - 1);
+  if (tree_row < 0) {
+    timeline_open(IMPORTANT_STREAM, "Important");
+    return;
+  }
+  const FeedNode *node = tree_root_node(tree_row);
   if (node->kind == 1) {
     push_folder_window(node->id, node->name);
   } else {
-    // Specials ("All unread", "Starred") and feeds open the timeline.
+    // Specials ("All unread", "Starred", "Important") and feeds open the
+    // timeline.
     timeline_open(node->id, node->name);
   }
 }
@@ -488,10 +565,33 @@ static void main_select_click(ClickRecognizerRef rec, void *ctx) {
   main_select_cb(s_main_menu, &idx, NULL);
 }
 
+//! Long-press SELECT: context menu on feed rows only (Mark all read /
+//! Refresh). Folders, specials and the accent strip do nothing.
+static void main_long_select_click(ClickRecognizerRef rec, void *ctx) {
+  MenuIndex idx = menu_layer_get_selected_index(s_main_menu);
+  if (idx.row == 0) {
+    return;
+  }
+  int root = tree_root_count();
+  if (root == 0) {
+    return;
+  }
+  int tree_row = root_data_to_tree(idx.row - 1);
+  if (tree_row < 0) {
+    return; // the Important special
+  }
+  const FeedNode *node = tree_root_node(tree_row);
+  if (node && node->kind == 2) {
+    open_context_menu(node);
+  }
+}
+
 static void main_click_config_provider(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_UP, main_up_click);
   window_single_click_subscribe(BUTTON_ID_DOWN, main_down_click);
   window_single_click_subscribe(BUTTON_ID_SELECT, main_select_click);
+  window_long_click_subscribe(BUTTON_ID_SELECT, LONG_SELECT_MS,
+                              main_long_select_click, NULL);
 }
 
 static void main_window_load(Window *window) {
@@ -564,6 +664,7 @@ static void folder_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
   const char *label;
   int32_t unread;
   int16_t text_x = 8;
+  const FeedNode *node = NULL;
 
   if (cell_index->row == 0) {
     // "All articles": the folder's own stream id opens the recursive listing.
@@ -573,7 +674,7 @@ static void folder_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
     draw_folder_marker(ctx, b, selected);
     text_x = 20;
   } else {
-    const FeedNode *node = tree_child_node(s_folder_id, cell_index->row - 1);
+    node = tree_child_node(s_folder_id, cell_index->row - 1);
     if (!node) {
       return;
     }
@@ -585,12 +686,17 @@ static void folder_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
     }
   }
 
+  bool np = node && new_pill_active(node);
   graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_fg());
   graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-                     GRect(text_x, (b.size.h - 22) / 2, b.size.w - text_x - 38, 22),
+                     GRect(text_x, (b.size.h - 22) / 2,
+                           b.size.w - text_x - 38 - (np ? NEW_PILL_W + 4 : 0), 22),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
-  draw_badge(ctx, b, unread, selected);
+  if (node) {
+    draw_new_pill(ctx, b, selected, node, badge_width(node->unread) + 4);
+  }
+  draw_badge(ctx, b, unread, selected, np ? NEW_PILL_W + 4 : 0);
 }
 
 static void folder_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
@@ -610,6 +716,19 @@ static void folder_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
   }
 }
 
+//! Long-press SELECT: context menu on feed rows only ("All articles" and
+//! sub-folder rows do nothing).
+static void folder_long_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
+                                  void *callback_context) {
+  if (cell_index->row == 0) {
+    return;
+  }
+  const FeedNode *node = tree_child_node(s_folder_id, cell_index->row - 1);
+  if (node && node->kind == 2) {
+    open_context_menu(node);
+  }
+}
+
 static void folder_window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
@@ -622,6 +741,7 @@ static void folder_window_load(Window *window) {
     .get_cell_height = folder_get_cell_height,
     .draw_row = folder_draw_row,
     .select_click = folder_select_cb,
+    .select_long_click = folder_long_select_cb,
   });
   menu_layer_set_click_config_onto_window(s_folder_menu, window);
   menu_layer_pad_bottom_enable(s_folder_menu, true);
@@ -656,12 +776,13 @@ static void push_folder_window(const char *id, const char *name) {
 
 // ---------------------------------------------------------------------------
 // Sub-menu (UP from the root): Refresh / Mark all read / Connection / the two
-// reading toggles / Unread only — flat, no submenus
+// reading toggles / Unread only / the four smart-surface toggles — flat, no
+// submenus
 // ---------------------------------------------------------------------------
 
 static uint16_t sub_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
                                  void *callback_context) {
-  return 6;
+  return 10;
 }
 
 static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
@@ -676,17 +797,29 @@ static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell
     menu_cell_basic_draw(ctx, cell_layer, "Mark all read",
                          "All articles in every feed", NULL);
   } else if (cell_index->row == 2) {
-    menu_cell_basic_draw(ctx, cell_layer, "Connection",
-                         "How to set up the server", NULL);
+    menu_cell_basic_draw(ctx, cell_layer, "Connection info",
+                         "Show the connected account", NULL);
   } else if (cell_index->row == 3) {
     menu_cell_basic_draw(ctx, cell_layer, "Mark read on list",
                          s_mark_list ? "ON" : "OFF", NULL);
   } else if (cell_index->row == 4) {
     menu_cell_basic_draw(ctx, cell_layer, "Mark read on detail",
                          s_mark_detail ? "ON" : "OFF", NULL);
-  } else {
+  } else if (cell_index->row == 5) {
     menu_cell_basic_draw(ctx, cell_layer, "Unread only",
                          s_unread_only ? "ON" : "OFF", NULL);
+  } else if (cell_index->row == 6) {
+    menu_cell_basic_draw(ctx, cell_layer, "Important row",
+                         s_important ? "ON" : "OFF", NULL);
+  } else if (cell_index->row == 7) {
+    menu_cell_basic_draw(ctx, cell_layer, "NEW-dot",
+                         s_newdot ? "ON" : "OFF", NULL);
+  } else if (cell_index->row == 8) {
+    menu_cell_basic_draw(ctx, cell_layer, "Progress line",
+                         s_progress ? "ON" : "OFF", NULL);
+  } else {
+    menu_cell_basic_draw(ctx, cell_layer, "Triage drain",
+                         s_triage ? "ON" : "OFF", NULL);
   }
 }
 
@@ -696,10 +829,14 @@ static void sub_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
     dialog_show_working("Refreshing");
     proto_request_tree();
   } else if (cell_index->row == 1) {
+    s_markall_stream[0] = '\0'; // the whole reading list
     s_confirm_markall = true;
     dialog_show_confirm_text("Mark all read?\n\nSELECT: confirm\nBACK: cancel");
   } else if (cell_index->row == 2) {
-    dialog_show_info("Set server + API password in the phone app settings");
+    // Connection info: ask the phone for the account; the ResultText reply
+    // is shown in the dialog ("Account: ...\n...\nServer: ...\nUnread: ...").
+    dialog_show_working("Loading");
+    proto_request_user_info();
   } else if (cell_index->row == 3) {
     s_mark_list = !s_mark_list;
     storage_save_settings();
@@ -710,8 +847,28 @@ static void sub_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
     storage_save_settings();
     vibes_short_pulse();
     menu_layer_reload_data(menu_layer);
-  } else {
+  } else if (cell_index->row == 5) {
     s_unread_only = !s_unread_only;
+    storage_save_settings();
+    vibes_short_pulse();
+    menu_layer_reload_data(menu_layer);
+  } else if (cell_index->row == 6) {
+    s_important = !s_important;
+    storage_save_settings();
+    vibes_short_pulse();
+    menu_layer_reload_data(menu_layer);
+  } else if (cell_index->row == 7) {
+    s_newdot = !s_newdot;
+    storage_save_settings();
+    vibes_short_pulse();
+    menu_layer_reload_data(menu_layer);
+  } else if (cell_index->row == 8) {
+    s_progress = !s_progress;
+    storage_save_settings();
+    vibes_short_pulse();
+    menu_layer_reload_data(menu_layer);
+  } else {
+    s_triage = !s_triage;
     storage_save_settings();
     vibes_short_pulse();
     menu_layer_reload_data(menu_layer);
@@ -749,6 +906,104 @@ static void push_submenu_window(void) {
     .unload = sub_window_unload,
   });
   window_stack_push(s_sub_window, true);
+}
+
+// ---------------------------------------------------------------------------
+// Context menu (long-press SELECT on a feed row): a small two-row menu —
+// "Mark all read" (orange confirm + mark-all-as-read for that feed) and
+// "Refresh" (re-fetch items and open the reader at the newest).
+// ---------------------------------------------------------------------------
+
+static Window *s_ctx_window;
+static MenuLayer *s_ctx_menu;
+static char s_ctx_feed_id[48];
+static char s_ctx_feed_name[48];
+
+static uint16_t ctx_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
+                                 void *callback_context) {
+  return 2;
+}
+
+static int16_t ctx_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index,
+                                   void *callback_context) {
+  return 44;
+}
+
+static void ctx_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
+                         void *callback_context) {
+  if (cell_index->row == 0) {
+    menu_cell_basic_draw(ctx, cell_layer, "Mark all read",
+                         "Mark every article in this feed", NULL);
+  } else {
+    menu_cell_basic_draw(ctx, cell_layer, "Refresh",
+                         "Re-fetch this feed", NULL);
+  }
+}
+
+static void ctx_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
+                          void *callback_context) {
+  // Snapshot the target feed before the window is destroyed by the pop.
+  char id[48];
+  char name[48];
+  snprintf(id, sizeof(id), "%s", s_ctx_feed_id);
+  snprintf(name, sizeof(name), "%s", s_ctx_feed_name);
+  if (s_ctx_window) {
+    window_stack_remove(s_ctx_window, true);
+  }
+  if (cell_index->row == 0) {
+    // Mark all read for this feed: reuse the orange confirm machinery.
+    snprintf(s_markall_stream, sizeof(s_markall_stream), "%s", id);
+    s_confirm_markall = true;
+    dialog_show_confirm_text("Mark all read?\n\nSELECT: confirm\nBACK: cancel");
+  } else {
+    // Refresh: timeline_open re-requests page 1 (newest first) and shows
+    // the reader.
+    timeline_open(id, name);
+  }
+}
+
+static void ctx_window_load(Window *window) {
+  Layer *root = window_get_root_layer(window);
+  GRect bounds = layer_get_bounds(root);
+  window_set_background_color(window, theme_bg());
+
+  // Bottom-anchored two-row sheet.
+  GRect menu_bounds = GRect(0, bounds.size.h - 96, bounds.size.w, 96);
+  s_ctx_menu = menu_layer_create(menu_bounds);
+  menu_layer_set_callbacks(s_ctx_menu, NULL, (MenuLayerCallbacks){
+    .get_num_rows = ctx_get_num_rows,
+    .get_cell_height = ctx_get_cell_height,
+    .draw_row = ctx_draw_row,
+    .select_click = ctx_select_cb,
+  });
+  menu_layer_set_click_config_onto_window(s_ctx_menu, window);
+  menu_layer_pad_bottom_enable(s_ctx_menu, true);
+  menu_layer_set_normal_colors(s_ctx_menu, theme_bg(), theme_fg());
+  menu_layer_set_highlight_colors(s_ctx_menu, s_accent, GColorBlack);
+  layer_add_child(root, menu_layer_get_layer(s_ctx_menu));
+}
+
+static void ctx_window_unload(Window *window) {
+  menu_layer_destroy(s_ctx_menu);
+  s_ctx_menu = NULL;
+  window_destroy(s_ctx_window);
+  s_ctx_window = NULL;
+}
+
+//! Open the context menu for a feed row (no-op for anything else).
+static void open_context_menu(const FeedNode *feed) {
+  if (!feed || feed->kind != 2) {
+    return;
+  }
+  snprintf(s_ctx_feed_id, sizeof(s_ctx_feed_id), "%s", feed->id);
+  snprintf(s_ctx_feed_name, sizeof(s_ctx_feed_name), "%s",
+           feed->name[0] ? feed->name : feed->id);
+  s_ctx_window = window_create();
+  window_set_window_handlers(s_ctx_window, (WindowHandlers){
+    .load = ctx_window_load,
+    .unload = ctx_window_unload,
+  });
+  window_stack_push(s_ctx_window, true);
 }
 
 // ---------------------------------------------------------------------------

@@ -275,10 +275,12 @@ function createClient(baseUrl, username, apiPass, opts) {
 
   /**
    * Feed tree: parallel subscription/list + unread-count, merged into an
-   * ordered node list {type, id, name, unread, parent}:
+   * ordered node list {type, id, name, unread, newest, parent}:
    *   specials first, then folders (depth asc, then name), then feeds
    *   (grouped by parent, alphabetical). Folder nodes always precede the
-   *   feeds/folders that reference them.
+   *   feeds/folders that reference them. `newest` is the per-feed
+   *   newestItemTimestampUsec (decimal µs string; '0' when absent) so the
+   *   watch can show a NEW-dot per feed.
    */
   function getTree(cb) {
     var subsUrl = base + API_BASE + '/reader/api/0/subscription/list?output=json';
@@ -328,12 +330,14 @@ function createClient(baseUrl, username, apiPass, opts) {
 
   function mergeTree(subsResp, countsResp) {
     var countsMap = {};
+    var newestMap = {};
     var unreadCounts = countsResp && countsResp.unreadcounts;
     if (unreadCounts) {
       for (var i = 0; i < unreadCounts.length; i++) {
         var uc = unreadCounts[i];
         if (uc && uc.id) {
           countsMap[uc.id] = uc.count || 0;
+          newestMap[uc.id] = String(uc.newestItemTimestampUsec || '0');
         }
       }
     }
@@ -347,6 +351,7 @@ function createClient(baseUrl, username, apiPass, opts) {
       id: READING_LIST,
       name: 'All unread',
       unread: countsMap[READING_LIST] || 0,
+      newest: '0',
       parent: ''
     });
     nodes.push({
@@ -354,6 +359,7 @@ function createClient(baseUrl, username, apiPass, opts) {
       id: STARRED,
       name: 'Starred',
       unread: 0,
+      newest: '0',
       parent: ''
     });
 
@@ -376,6 +382,7 @@ function createClient(baseUrl, username, apiPass, opts) {
         id: labelId,
         name: lastLabelSegment(labelId),
         unread: 0,
+        newest: '0',
         parent: parent
       });
     }
@@ -409,6 +416,7 @@ function createClient(baseUrl, username, apiPass, opts) {
         id: feedId,
         name: String(sub.title || feedId),
         unread: countsMap[feedId] || 0,
+        newest: newestMap[feedId] || '0',
         parent: parent
       });
     }
@@ -451,7 +459,10 @@ function createClient(baseUrl, username, apiPass, opts) {
   /**
    * One page of a stream. Label streams are %2F-encoded; the reading-list
    * additionally excludes already-read items. Returns
-   * {items: [...], continuation: string} — continuation '' means no more.
+   * {items: [...], continuation: string, newest: string} — continuation ''
+   * means no more; newest is the raw timestampUsec of the newest article in
+   * the page (decimal µs string, '0' when the page has no items), so the
+   * watch can store it as the feed's last-seen when the feed is opened.
    */
   function getItems(stream, cont, n, unreadOnly, cb) {
     var enc = encodeStream(stream);
@@ -479,13 +490,23 @@ function createClient(baseUrl, username, apiPass, opts) {
         return;
       }
       var items = [];
+      var newest = '0';
       var list = parsed.items;
       if (list) {
         for (var i = 0; i < list.length; i++) {
           items.push(mapItem(list[i]));
+          var ts = String(list[i].timestampUsec || '');
+          if (ts.length > newest.length ||
+              (ts.length === newest.length && ts > newest)) {
+            newest = ts;
+          }
         }
       }
-      cb(null, { items: items, continuation: parsed.continuation || '' });
+      cb(null, {
+        items: items,
+        continuation: parsed.continuation || '',
+        newest: newest
+      });
     });
   }
 
@@ -543,33 +564,58 @@ function createClient(baseUrl, username, apiPass, opts) {
   }
 
   /**
-   * Fetch and strip one item's summary (max 300 chars; '' if unavailable).
+   * Account info for the Connection screen: parallel user-info +
+   * unread-count (max field), like getTree's parallel fetch. Returns
+   * {userName, userEmail, unread} with raw values ('' / 0 when absent).
    */
-  function getSummary(id, cb) {
-    request('POST', base + API_BASE + '/reader/api/0/stream/items/contents',
-      'i=' + encodeURIComponent(String(id)), function (err, resp) {
-        if (err) {
-          cb(err);
-          return;
-        }
-        var parsed = null;
-        try {
-          parsed = JSON.parse(resp.text);
-        } catch (e) {
-          cb(makeError(2, 'Bad summary response'));
-          return;
-        }
-        var item = null;
-        if (parsed && parsed.items && parsed.items.length) {
-          item = parsed.items[0];
-        } else if (Array.isArray(parsed)) {
-          item = parsed[0];
-        } else {
-          item = parsed;
-        }
-        var html = (item && item.summary && item.summary.content) || '';
-        cb(null, stripHtml(html).slice(0, 300));
+  function getUserInfo(cb) {
+    var infoUrl = base + API_BASE + '/reader/api/0/user-info?output=json';
+    var countsUrl = base + API_BASE + '/reader/api/0/unread-count?output=json';
+    var info = null;
+    var counts = null;
+    var firstErr = null;
+    var pending = 2;
+
+    function finish() {
+      pending -= 1;
+      if (pending > 0) {
+        return;
+      }
+      if (firstErr) {
+        cb(firstErr);
+        return;
+      }
+      cb(null, {
+        userName: info.userName || '',
+        userEmail: info.userEmail || '',
+        unread: counts.max || 0
       });
+    }
+
+    request('GET', infoUrl, null, function (err, resp) {
+      if (err) {
+        firstErr = firstErr || err;
+      } else {
+        try {
+          info = JSON.parse(resp.text);
+        } catch (e) {
+          firstErr = firstErr || makeError(2, 'Bad user info');
+        }
+      }
+      finish();
+    });
+    request('GET', countsUrl, null, function (err, resp) {
+      if (err) {
+        firstErr = firstErr || err;
+      } else {
+        try {
+          counts = JSON.parse(resp.text);
+        } catch (e) {
+          firstErr = firstErr || makeError(2, 'Bad unread counts');
+        }
+      }
+      finish();
+    });
   }
 
   return {
@@ -577,6 +623,7 @@ function createClient(baseUrl, username, apiPass, opts) {
     ensureAuth: ensureAuth,
     getTree: getTree,
     getItems: getItems,
+    getUserInfo: getUserInfo,
     markRead: markRead,
     star: star,
     markAllRead: markAllRead

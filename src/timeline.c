@@ -47,7 +47,9 @@ static Layer *s_page_area; // holds the pages; added BEFORE the sidebar so the
 static Layer *s_top_bar;   // black bar, accent text (static)
 static TextLayer *s_top_text;
 static Layer *s_sidebar;   // accent bar with the read/unread + star icons
-static TextLayer *s_status; // full-screen "Loading..." / "No articles"
+static TextLayer *s_status;   // full-screen "Loading..." / "All caught up"
+static Layer *s_status_check; // accent GPath check above the status text
+static TextLayer *s_status_hint; // small hint under the status text
 
 // One article page: everything that slides during a transition. Two pages
 // exist so the transition can animate them against each other.
@@ -84,6 +86,18 @@ static const GPathInfo STAR_PATH_INFO = {
 
 static GPath *s_star_path;
 
+// Shared draw path: a closed check mark (~16 px) for the all-caught-up
+// status; drawn in accent above the status text.
+static const GPathInfo CHECK_PATH_INFO = {
+  .num_points = 6,
+  .points = (GPoint[6]){
+    { -7, 2 }, { -1, 8 }, { 7, -3 },
+    { 5, -5 }, { -4, 2 }, { -8, 0 },
+  },
+};
+
+static GPath *s_status_check_path;
+
 static void timeline_prefetch_check(void);
 static void timeline_content_offset_changed(ScrollLayer *scroll, void *context);
 static void article_mark_read(int32_t idx);
@@ -93,6 +107,7 @@ static void transition_to(int8_t dir);
 static void page_build(Page *p, int32_t idx);
 static void page_destroy(Page *p);
 static void status_update(void);
+static void status_check_update(Layer *layer, GContext *ctx);
 static void transition_anim_stopped(Animation *anim, bool finished, void *context);
 
 //! The article currently under the reader, or NULL when the buffer is empty.
@@ -136,10 +151,21 @@ static void format_reltime(char *buf, size_t len, int32_t published) {
 // Static chrome: top bar + sidebar
 // ---------------------------------------------------------------------------
 
-//! Black top bar; the stream name is a TextLayer in accent.
+//! Black top bar; the stream name is a TextLayer in accent. A 2 px accent
+//! progress line along the bar's bottom edge tracks the current article
+//! position within the loaded stream (gated by the progress setting).
 static void top_bar_update(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, GColorBlack);
-  graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+
+  if (setting_progress() && s_count > 0) {
+    int16_t w = (int16_t)((int32_t)(s_idx + 1) * b.size.w / s_count);
+    if (w > 0) {
+      graphics_context_set_fill_color(ctx, s_accent);
+      graphics_fill_rect(ctx, GRect(0, b.size.h - 2, w, 2), 0, GCornerNone);
+    }
+  }
 }
 
 //! Thick accent sidebar holding the icons: a white dot (filled = unread,
@@ -317,11 +343,21 @@ static void timeline_content_offset_changed(ScrollLayer *scroll, void *context) 
 }
 
 //! Transition finished: the target page is fully on screen. Commit the new
-//! index, mark read on advances, drop the old page and release the locks.
+//! index, mark read on advances, drain the triage stream (unstar the article
+//! we landed on when advancing inside Starred), drop the old page and
+//! release the locks.
 static void transition_finalize(void) {
   s_idx = s_target_idx;
   if (s_dir > 0 && s_mark_detail) {
     article_mark_read(s_idx);
+  }
+  if (s_dir > 0 && setting_triage() &&
+      strcmp(s_stream, "user/-/state/com.google/starred") == 0) {
+    if (s_idx >= 0 && s_idx < s_count) {
+      Article *a = &s_articles[s_idx];
+      a->star = 0;
+      proto_star(a->id, 0);
+    }
   }
   page_destroy(&s_pages[s_cur]);
   s_cur = 1 - s_cur;
@@ -330,6 +366,9 @@ static void transition_finalize(void) {
   s_last_offset = GPointZero;
   if (s_sidebar) {
     layer_mark_dirty(s_sidebar);
+  }
+  if (s_top_bar) {
+    layer_mark_dirty(s_top_bar); // progress line follows the new index
   }
   timeline_prefetch_check();
 }
@@ -447,9 +486,18 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   }
 }
 
-//! SELECT advances to the next article.
+//! SELECT advances to the next article; on an empty (all-caught-up) stream
+//! it re-fetches the first page (the status hint points at this).
 static void timeline_select_click(ClickRecognizerRef rec, void *ctx) {
-  if (s_count == 0 || s_advancing) {
+  if (s_count == 0) {
+    if (!s_loading) {
+      s_loading = true;
+      proto_request_items(s_stream, "");
+      status_update();
+    }
+    return;
+  }
+  if (s_advancing) {
     return;
   }
   maybe_advance();
@@ -489,17 +537,43 @@ static void timeline_click_config_provider(void *ctx) {
 // Timeline window
 // ---------------------------------------------------------------------------
 
+//! Accent check mark drawn above the status text when the stream came up
+//! empty (all caught up).
+static void status_check_update(Layer *layer, GContext *ctx) {
+  if (!s_status_check_path) {
+    return;
+  }
+  GRect b = layer_get_bounds(layer);
+  gpath_move_to(s_status_check_path, GPoint(b.size.w / 2, b.size.h / 2));
+  graphics_context_set_stroke_color(ctx, s_accent);
+  graphics_context_set_stroke_width(ctx, 3);
+  gpath_draw_outline(ctx, s_status_check_path);
+}
+
 //! Full-screen status while the stream loads or comes up empty; hidden as
-//! soon as the first article arrives.
+//! soon as the first article arrives. An empty, fully-loaded stream shows
+//! the all-caught-up state: accent check + "All caught up" + a hint.
 static void status_update(void) {
   if (!s_status) {
     return;
   }
-  if (s_count > 0) {
-    layer_set_hidden(text_layer_get_layer(s_status), true);
-  } else {
-    layer_set_hidden(text_layer_get_layer(s_status), false);
-    text_layer_set_text(s_status, s_loading ? "Loading..." : "No articles");
+  bool empty = (s_count == 0);
+  layer_set_hidden(text_layer_get_layer(s_status), !empty);
+  if (s_status_check) {
+    layer_set_hidden(s_status_check, !empty || s_loading);
+  }
+  if (s_status_hint) {
+    layer_set_hidden(text_layer_get_layer(s_status_hint), !empty || s_loading);
+  }
+  if (empty) {
+    if (s_loading) {
+      text_layer_set_text(s_status, "Loading...");
+    } else {
+      text_layer_set_text(s_status, "All caught up");
+      if (s_status_hint) {
+        text_layer_set_text(s_status_hint, "SELECT to refresh");
+      }
+    }
   }
 }
 
@@ -514,6 +588,7 @@ static void timeline_window_load(Window *window) {
   window_set_background_color(window, theme_bg());
 
   s_star_path = gpath_create(&STAR_PATH_INFO);
+  s_status_check_path = gpath_create(&CHECK_PATH_INFO);
   s_last_offset = GPointZero;
   s_cur = 0;
   s_pages[0].idx = -1;
@@ -539,8 +614,22 @@ static void timeline_window_load(Window *window) {
   text_layer_set_overflow_mode(s_status, GTextOverflowModeTrailingEllipsis);
   text_layer_set_background_color(s_status, GColorClear);
   text_layer_set_text_color(s_status, theme_muted());
-  text_layer_set_text(s_status, s_loading ? "Loading..." : "No articles");
+  text_layer_set_text(s_status, s_loading ? "Loading..." : "All caught up");
   layer_add_child(root, text_layer_get_layer(s_status));
+
+  // All-caught-up chrome: accent check above the text, hint below it. Both
+  // are hidden by status_update() unless the stream is empty and loaded.
+  s_status_check = layer_create(GRect(s_win_w / 2 - 12, s_win_h / 2 - 46, 24, 18));
+  layer_set_update_proc(s_status_check, status_check_update);
+  layer_add_child(root, s_status_check);
+
+  s_status_hint = text_layer_create(GRect(0, s_win_h / 2 + 12, s_win_w, 16));
+  text_layer_set_font(s_status_hint, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_alignment(s_status_hint, GTextAlignmentCenter);
+  text_layer_set_overflow_mode(s_status_hint, GTextOverflowModeTrailingEllipsis);
+  text_layer_set_background_color(s_status_hint, GColorClear);
+  text_layer_set_text_color(s_status_hint, theme_muted());
+  layer_add_child(root, text_layer_get_layer(s_status_hint));
 
   // Page area (below the sidebar in z-order) + the accent sidebar on top.
   s_page_area = layer_create(GRect(0, TOP_BAR_H, s_win_w, s_view_h));
@@ -585,9 +674,21 @@ static void timeline_window_unload(Window *window) {
     gpath_destroy(s_star_path);
     s_star_path = NULL;
   }
+  if (s_status_check_path) {
+    gpath_destroy(s_status_check_path);
+    s_status_check_path = NULL;
+  }
   if (s_status) {
     text_layer_destroy(s_status);
     s_status = NULL;
+  }
+  if (s_status_check) {
+    layer_destroy(s_status_check);
+    s_status_check = NULL;
+  }
+  if (s_status_hint) {
+    text_layer_destroy(s_status_hint);
+    s_status_hint = NULL;
   }
   if (s_top_text) {
     text_layer_destroy(s_top_text);
@@ -713,6 +814,9 @@ void timeline_collect_article(DictionaryIterator *iter) {
     if (s_sidebar) {
       layer_mark_dirty(s_sidebar);
     }
+    if (s_top_bar) {
+      layer_mark_dirty(s_top_bar); // progress line appears with the first article
+    }
     if (s_mark_list) {
       article_mark_read(0);
     }
@@ -721,7 +825,7 @@ void timeline_collect_article(DictionaryIterator *iter) {
 }
 
 //! The page ended: store the continuation ("", = no more items), release the
-//! loading flag and show "No articles" on an empty stream.
+//! loading flag and show the all-caught-up state on an empty stream.
 void timeline_page_end(const char *cont) {
   snprintf(s_cont, sizeof(s_cont), "%s", cont ? cont : "");
   s_loaded_all = (s_cont[0] == '\0');
@@ -731,6 +835,9 @@ void timeline_page_end(const char *cont) {
     return;
   }
   status_update();
+  if (s_top_bar) {
+    layer_mark_dirty(s_top_bar); // progress line grows with the loaded count
+  }
   if (s_count > 0) {
     timeline_prefetch_check();
   }
@@ -782,8 +889,17 @@ void timeline_apply_settings(void) {
   if (s_status) {
     text_layer_set_text_color(s_status, theme_muted());
   }
+  if (s_status_hint) {
+    text_layer_set_text_color(s_status_hint, theme_muted());
+  }
+  if (s_status_check) {
+    layer_mark_dirty(s_status_check); // accent check
+  }
   if (s_top_text) {
     text_layer_set_text_color(s_top_text, s_accent);
+  }
+  if (s_top_bar) {
+    layer_mark_dirty(s_top_bar); // accent progress line
   }
   for (int i = 0; i < 2; i++) {
     Page *p = &s_pages[i];

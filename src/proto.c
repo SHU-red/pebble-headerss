@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include <stdlib.h>
 
 #include "proto.h"
 #include "storage.h"
@@ -19,6 +20,10 @@
 static char s_mark_ids[MARK_BATCH_MAX][24];
 static uint8_t s_mark_count;
 static AppTimer *s_mark_timer;
+
+//! Stream the watch last asked for; an incoming ItemCount + FeedNewest
+//! updates that stream's last-seen (NEW-dot support).
+static char s_fetch_stream[48];
 
 //! Send the queued ids as one CSV MarkRead payload, then reset the queue.
 static void mark_send_batch(void) {
@@ -96,6 +101,9 @@ void proto_request_tree(void) {
 
 //! Request one page of a stream; cont "" asks for the first page.
 void proto_request_items(const char *stream, const char *cont) {
+  if (stream && stream[0]) {
+    snprintf(s_fetch_stream, sizeof(s_fetch_stream), "%s", stream);
+  }
   DictionaryIterator *iter;
   AppMessageResult res = app_message_outbox_begin(&iter);
   if (res == APP_MSG_OK) {
@@ -108,6 +116,20 @@ void proto_request_items(const char *stream, const char *cont) {
   }
   if (res != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchItems (%d)", (int)res);
+  }
+}
+
+//! Ask the phone for account info (Connection screen); the reply arrives as
+//! ResultCode/ResultText with a multiline "Account: ..." block.
+void proto_request_user_info(void) {
+  DictionaryIterator *iter;
+  AppMessageResult res = app_message_outbox_begin(&iter);
+  if (res == APP_MSG_OK) {
+    dict_write_int32(iter, MESSAGE_KEY_FetchUserInfo, 1);
+    res = app_message_outbox_send();
+  }
+  if (res != APP_MSG_OK) {
+    APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchUserInfo (%d)", (int)res);
   }
 }
 
@@ -140,7 +162,8 @@ void proto_mark_all_read(const char *stream) {
 
 //! Answer the phone's RequestConfig with the durable watch-bound settings.
 //! The connection fields (server/user/password) are phone-side only and
-//! never round-trip (agreed with the JS agent).
+//! never round-trip (agreed with the JS agent). The smart-surface toggles
+//! are reported W->P too (the JS may ignore them, like the other replies).
 void proto_reply_config(void) {
   DictionaryIterator *iter;
   if (app_message_outbox_begin(&iter) == APP_MSG_OK) {
@@ -149,6 +172,10 @@ void proto_reply_config(void) {
     dict_write_int32(iter, MESSAGE_KEY_TouchEnabled, s_touch ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_MarkOnOpenList, s_mark_list ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_MarkOnOpenDetail, s_mark_detail ? 1 : 0);
+    dict_write_int32(iter, MESSAGE_KEY_ImportantRow, setting_important() ? 1 : 0);
+    dict_write_int32(iter, MESSAGE_KEY_TriageDrain, setting_triage() ? 1 : 0);
+    dict_write_int32(iter, MESSAGE_KEY_NewDot, setting_newdot() ? 1 : 0);
+    dict_write_int32(iter, MESSAGE_KEY_ProgressLine, setting_progress() ? 1 : 0);
     dict_write_end(iter);
     app_message_outbox_send();
   }
@@ -179,6 +206,7 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     const char *id = "", *name = "", *parent = "";
     int32_t kind = t->value->int32;
     int32_t unread = 0;
+    int64_t newest = 0;
     if ((t = dict_find(iter, MESSAGE_KEY_FeedId))) {
       id = t->value->cstring;
     }
@@ -188,16 +216,30 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     if ((t = dict_find(iter, MESSAGE_KEY_FeedUnread))) {
       unread = t->value->int32;
     }
+    if ((t = dict_find(iter, MESSAGE_KEY_FeedNewest))) {
+      // Decimal microseconds string; 0/absent when the feed has no items.
+      newest = strtoll(t->value->cstring, NULL, 10);
+    }
     if ((t = dict_find(iter, MESSAGE_KEY_FeedParent))) {
       parent = t->value->cstring;
     }
-    tree_collect_node(kind, id, name, unread, parent);
+    tree_collect_node(kind, id, name, unread, parent, newest);
     return;
   }
 
-  // Item page: ItemCount announces the page, then one message per article
+  // Item page: ItemCount announces the page (carrying FeedNewest, the newest
+  // article timestampUsec of the page), then one message per article
   // (ItemTitle present), then a final ItemCont with the next continuation.
   if ((t = dict_find(iter, MESSAGE_KEY_ItemCount))) {
+    // Opening a stream stores its last-seen: seconds = FeedNewest / 1000000.
+    // The NEW-dot then compares the tree's per-feed newest against this.
+    Tuple *newest_t = dict_find(iter, MESSAGE_KEY_FeedNewest);
+    if (newest_t) {
+      int64_t usec = strtoll(newest_t->value->cstring, NULL, 10);
+      if (usec > 0) {
+        storage_feed_set_last_seen(s_fetch_stream, usec / 1000000);
+      }
+    }
     timeline_page_begin(t->value->int32);
     return;
   }

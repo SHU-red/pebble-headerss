@@ -27,7 +27,7 @@ void tree_reset(void) {
 
 //! Append one node (bounds-checked; silently drops overflows).
 void tree_add_node(int32_t kind, const char *id, const char *name,
-                   int32_t unread, const char *parent) {
+                   int32_t unread, const char *parent, int64_t newest) {
   if (s_node_count >= MAX_FEED_NODES) {
     return;
   }
@@ -37,6 +37,7 @@ void tree_add_node(int32_t kind, const char *id, const char *name,
   snprintf(n->parent, sizeof(n->parent), "%s", parent ? parent : "");
   n->kind = (uint8_t)(kind < 0 ? 0 : (kind > 2 ? 2 : kind));
   n->unread = unread;
+  n->newest = newest;
 }
 
 // ---------------------------------------------------------------------------
@@ -55,19 +56,21 @@ void tree_begin_collect(int32_t count) {
 }
 
 void tree_collect_node(int32_t kind, const char *id, const char *name,
-                       int32_t unread, const char *parent) {
-  tree_add_node(kind, id, name, unread, parent);
+                       int32_t unread, const char *parent, int64_t newest) {
+  tree_add_node(kind, id, name, unread, parent, newest);
   s_collected++;
   if (s_collected >= s_collect_expected) {
     tree_fetch_done();
   }
 }
 
-//! The whole tree has arrived: recompute folder sums, persist the cache and
-//! let main.c refresh the menus (and dismiss any working dialog).
+//! The whole tree has arrived: recompute folder sums, persist the cache,
+//! sort into menu order and let main.c refresh the menus (and dismiss any
+//! working dialog).
 void tree_fetch_done(void) {
   tree_compute_unread();
   storage_save_tree(s_nodes, s_node_count);
+  tree_sort();
   ui_tree_updated();
 }
 
@@ -200,6 +203,55 @@ const FeedNode *tree_child_node(const char *folder_id, int row) {
   return NULL;
 }
 
+// ---------------------------------------------------------------------------
+// Menu ordering
+// ---------------------------------------------------------------------------
+
+//! Rank for the stable menu sort: specials (kind 0) stay pinned at the top,
+//! then folders (kind 1), then feeds (kind 2) — sub-folders stay above feeds.
+static int sort_rank(const FeedNode *n) {
+  return n->kind >= 2 ? 2 : (int)n->kind;
+}
+
+//! Compare two nodes for the stable menu sort. Specials and folders keep
+//! their (stable) arrival order; feeds sort within their parent group by
+//! newest desc, unread desc, title asc.
+static int node_sort_cmp(const FeedNode *a, const FeedNode *b) {
+  int ra = sort_rank(a);
+  int rb = sort_rank(b);
+  if (ra != rb) {
+    return ra - rb;
+  }
+  if (ra != 2) {
+    return 0; // specials / folders: stable arrival order
+  }
+  int p = strcmp(a->parent, b->parent); // keep each folder's feeds together
+  if (p != 0) {
+    return p;
+  }
+  if (a->newest != b->newest) {
+    return a->newest > b->newest ? -1 : 1; // newest desc
+  }
+  if (a->unread != b->unread) {
+    return a->unread > b->unread ? -1 : 1; // unread desc
+  }
+  return strcmp(a->name, b->name); // title asc
+}
+
+//! Stable insertion sort of the live array (64 nodes max; O(n^2) is trivial
+//! here and keeps equal keys in arrival order).
+void tree_sort(void) {
+  for (int i = 1; i < s_node_count; i++) {
+    FeedNode key = s_nodes[i];
+    int j = i - 1;
+    while (j >= 0 && node_sort_cmp(&s_nodes[j], &key) > 0) {
+      s_nodes[j + 1] = s_nodes[j];
+      j--;
+    }
+    s_nodes[j + 1] = key;
+  }
+}
+
 //! Linear lookup by stream id (non-const internal variant for mutation).
 static FeedNode *find_node(const char *id) {
   if (!id || !id[0]) {
@@ -222,5 +274,6 @@ const FeedNode *tree_find(const char *id) {
 int tree_load_cache(void) {
   tree_reset();
   s_node_count = storage_load_tree(s_nodes, MAX_FEED_NODES);
+  tree_sort();
   return s_node_count;
 }

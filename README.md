@@ -2,7 +2,8 @@
 
 FreshRSS feed headings on your Pebble Time 2 — browse the feed tree, run
 through articles, mark them read, star favourites. Native Timeline-style
-reading view with an accent bar, dots and a pin.
+reading view with a black top bar, always-accent heading and an accent icon
+sidebar (read/unread dot + star).
 
 > [!NOTE]  
 > ☕ **Buy Me A Coffee** — These are small tools, built with AI — on purpose. There isn't enough time to learn every language and dive into every rabbit hole, so AI lets me solve real problems from my daily life and homelab — and that matters more to me than clever code.
@@ -12,16 +13,19 @@ reading view with an accent bar, dots and a pin.
 
 ## Features
 
-- **Feed tree** — All unread / Starred streams, nested folders with unread
-  badges; open a folder to play **all articles recursively** or dive into a
-  single feed
+- **Feed tree** — All unread / Starred / **Important** (FreshRSS priority
+  feeds) streams, nested folders with unread badges; **NEW-dots** on feeds
+  with articles newer than your last visit, feeds sorted by newest activity;
+  open a folder to play **all articles recursively** or dive into a single
+  feed
 - **Timeline reading view** — one article full screen: black top bar with the
   folder/feed in accent, accent header bar (heading + feed·time), scrollable
   summary body; scrolling past the bottom slides to the next article
   (continuous two-page slide, 260 ms), scrolling up past the top goes back to
-  previously read articles; thick accent sidebar on the right holds the
-  read/unread dot (filled = unread, outline = read) and the yellow star
-  (long-press SELECT toggles)
+  previously read articles; a static 2 px accent progress line in the top bar
+  shows position in the stream; a 26 px accent sidebar holds the read/unread
+  dot (filled = unread, outline = read) and the yellow star (long-press
+  SELECT toggles); empty streams show an "All caught up" checkmark screen
 - **Read through** — opening a stream shows the first article full screen;
   scroll to the bottom (or press SELECT) to advance; articles are marked read
   on becoming current (list toggle for the first, detail toggle for
@@ -31,15 +35,20 @@ reading view with an accent bar, dots and a pin.
   server for feed/folder streams; "All unread" always shows only unread
 - **Star** — long-press SELECT toggles the star; starred articles show a
   yellow star icon
+- **Per-feed actions** — long-press SELECT on a feed row: **Mark all read**
+  (with confirm) or **Refresh** (re-fetch and open at the newest)
+- **Triage drain** — optional (sub-menu): inside Starred, advancing past an
+  article un-stars it — star = keep, reading drains the list
 - **Modern look** — dark theme by default, accent color everywhere: accent
   top strip on the root menu, permanent accent right spine in every menu,
-  unread counts as filled accent pills, accent-selected rows; in the reader
-  the header bar and pin carry the read state (accent = unread, dark gray =
-  read)
+  unread counts as filled accent pills, accent-selected rows; reader = black
+  top bar with accent stream name, always-accent heading with black text,
+  icon sidebar for read state and star
 - **Settings** — UP on the top accent strip opens the watch sub-menu:
-  Refresh, Mark all read, Connection hint, reading toggles, Unread only; the
-  connection/appearance page lives in the phone app settings (Clay):
-  FreshRSS URL, username, API password, theme
+  Refresh, Mark all read, Connection info (account + unread), reading
+  toggles, Unread only, Important row / NEW-dot / Progress line / Triage
+  drain toggles; the connection/appearance page lives in the phone app
+  settings (Clay): FreshRSS URL, username, API password, theme
 - **Lean** — 96-article window in RAM, live-only data, tree cached in flash
   for instant start
 
@@ -47,8 +56,9 @@ reading view with an accent bar, dots and a pin.
 
 100% FreshRSS-compatible via the **GReader API** (`/api/greader.php`):
 ClientLogin auth (per-user **API password**, not the login password),
-subscription list, unread counts, continuation-paginated streams, edit-tag
-mark-read/star, mark-all-as-read.
+subscription list, unread counts (per-feed newest timestamps for NEW-dots),
+continuation-paginated streams, edit-tag mark-read/star, mark-all-as-read,
+user-info.
 
 ## Setup
 

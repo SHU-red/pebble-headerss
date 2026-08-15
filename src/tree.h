@@ -13,15 +13,20 @@
 
 void tree_reset(void);
 void tree_add_node(int32_t kind, const char *id, const char *name,
-                   int32_t unread, const char *parent);
+                   int32_t unread, const char *parent, int64_t newest);
 
 //! Streaming collect: begin_collect resets and records the expected node
 //! count; collect_node appends and fires tree_fetch_done() once the expected
 //! count is reached (also fires immediately for a 0-node tree).
 void tree_begin_collect(int32_t count);
 void tree_collect_node(int32_t kind, const char *id, const char *name,
-                       int32_t unread, const char *parent);
+                       int32_t unread, const char *parent, int64_t newest);
 void tree_fetch_done(void);
+
+//! Stable menu order: specials pinned at top (arrival order), then folders
+//! (arrival order), then feeds — grouped by parent — sorted by newest desc,
+//! unread desc, title asc. Runs on fetch-done and cache load.
+void tree_sort(void);
 
 //! Folder unread = sum of the subtree feeds; the reading-list special keeps
 //! the server count; starred is forced to 0.
@@ -31,10 +36,12 @@ void tree_compute_unread(void);
 void tree_feed_decrement(const char *feed_id);
 
 //! Row mapping for the root menu: specials + top-level folders + top-level
-//! feeds, in arrival order.
+//! feeds, in tree_sort() order (specials pinned, folders, then feeds sorted
+//! by newest desc / unread desc / title asc within their group).
 int tree_root_count(void);
 const FeedNode *tree_root_node(int row);
-//! Row mapping for a folder menu: child folders first, then child feeds.
+//! Row mapping for a folder menu: child folders first, then child feeds
+//! (feeds sorted by newest desc / unread desc / title asc).
 int tree_child_count(const char *folder_id);
 const FeedNode *tree_child_node(const char *folder_id, int row);
 

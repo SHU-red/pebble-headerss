@@ -4,8 +4,23 @@
 #include "common.h"
 
 // ---------------------------------------------------------------------------
-// Persist keys (launcher numbering scheme: small ids for settings, a base +
-// index for the tree cache).
+// Persist key map (launcher numbering scheme: small ids for settings, a base
+// + index for the tree cache and the per-feed last-seen table).
+//
+//   1  AccentColor (int32, 24-bit hex)
+//   2  DarkMode (int32)
+//   3  TouchEnabled (int32)
+//   4  MarkOnOpenList (int32)
+//   5  MarkOnOpenDetail (int32)
+//   6  UnreadOnly (int32)
+//   7  ImportantRow (int32, smart-surface toggle; default ON)
+//   8  NewDot (int32, smart-surface toggle; default ON)
+//   9  ProgressLine (int32, smart-surface toggle; default ON)
+//   10 TreeCount (int32)
+//   11 TriageDrain (int32, smart-surface toggle; default OFF)
+//   12 LastSeenCount (int32)
+//   20+i  Tree cache: FeedNode blob per node (<= 256 B each)
+//   100+i LastSeen: {char id[48]; int64_t seconds;} per feed (<= 256 B each)
 // ---------------------------------------------------------------------------
 
 #define PERSIST_KEY_ACCENT 1     // int32: 24-bit hex of the accent color
@@ -14,12 +29,27 @@
 #define PERSIST_KEY_MARK_LIST 4  // int32: 1 = mark read on open (timeline)
 #define PERSIST_KEY_MARK_DETAIL 5 // int32: 1 = mark read on open (detail)
 #define PERSIST_KEY_UNREAD_ONLY 6 // int32: 1 = only fetch unread articles
+#define PERSIST_KEY_IMPORTANT 7  // int32: 1 = Important row in root menu
+#define PERSIST_KEY_NEWDOT 8     // int32: 1 = NEW-dot on unseen feeds
+#define PERSIST_KEY_PROGRESS 9   // int32: 1 = progress line on the top bar
 #define PERSIST_KEY_TREE_COUNT 10 // int32: number of cached tree nodes
+#define PERSIST_KEY_TRIAGE 11    // int32: 1 = triage drain from Starred
+#define PERSIST_KEY_LASTSEEN_COUNT 12 // int32: number of last-seen entries
 #define PERSIST_KEY_TREE_BASE 20  // + i: FeedNode blobs (<= 256 B each)
+#define PERSIST_KEY_LASTSEEN_BASE 100 // + i: last-seen entries (<= 256 B each)
 
 #define TREE_CACHE_MAX 32 // cap persisted nodes (persist size budget)
 
 #define DEFAULT_ACCENT_HEX 0x0055AA // GColorCobaltBlue (24-bit RGB)
+
+//! One per-feed last-seen entry (seconds granularity).
+typedef struct {
+  char id[48];     // stream id ("feed/N", ...)
+  int64_t seconds; // last-seen unix seconds, from FeedNewest/1000000
+} LastSeenEntry;
+
+static LastSeenEntry s_last_seen[MAX_FEED_NODES];
+static int s_last_seen_count;
 
 GColor s_accent;
 bool s_dark;
@@ -27,6 +57,10 @@ bool s_touch;
 bool s_mark_list;
 bool s_mark_detail;
 bool s_unread_only;
+bool s_important;
+bool s_newdot;
+bool s_progress;
+bool s_triage;
 
 //! 24-bit RGB hex of a GColor8 (2-bit channels scaled up), for flash storage.
 static uint32_t accent_to_hex(GColor c) {
@@ -34,6 +68,73 @@ static uint32_t accent_to_hex(GColor c) {
   uint8_t g = (c.argb >> 2) & 0x3;
   uint8_t b = c.argb & 0x3;
   return (((uint32_t)r * 85) << 16) | (((uint32_t)g * 85) << 8) | ((uint32_t)b * 85);
+}
+
+// ---------------------------------------------------------------------------
+// Smart-surface setting getters (declared in common.h)
+// ---------------------------------------------------------------------------
+
+bool setting_important(void) { return s_important; }
+bool setting_triage(void) { return s_triage; }
+bool setting_newdot(void) { return s_newdot; }
+bool setting_progress(void) { return s_progress; }
+
+// ---------------------------------------------------------------------------
+// Per-feed last-seen (NEW-dot support). A small id-keyed table persisted at
+// PERSIST_KEY_LASTSEEN_BASE + i; populated when items arrive for a feed (the
+// phone sends FeedNewest with ItemCount). Missing entries read as 0.
+// ---------------------------------------------------------------------------
+
+static void storage_save_last_seen(void) {
+  persist_write_int(PERSIST_KEY_LASTSEEN_COUNT, s_last_seen_count);
+  for (int i = 0; i < s_last_seen_count; i++) {
+    persist_write_data(PERSIST_KEY_LASTSEEN_BASE + i,
+                       &s_last_seen[i], sizeof(LastSeenEntry));
+  }
+  for (int i = s_last_seen_count; i < MAX_FEED_NODES; i++) {
+    if (persist_exists(PERSIST_KEY_LASTSEEN_BASE + i)) {
+      persist_delete(PERSIST_KEY_LASTSEEN_BASE + i);
+    }
+  }
+}
+
+int64_t storage_feed_last_seen(const char *feed_id) {
+  if (!feed_id || !feed_id[0]) {
+    return 0;
+  }
+  for (int i = 0; i < s_last_seen_count; i++) {
+    if (strcmp(s_last_seen[i].id, feed_id) == 0) {
+      return s_last_seen[i].seconds;
+    }
+  }
+  return 0;
+}
+
+void storage_feed_set_last_seen(const char *feed_id, int64_t seconds) {
+  if (!feed_id || !feed_id[0]) {
+    return;
+  }
+  for (int i = 0; i < s_last_seen_count; i++) {
+    if (strcmp(s_last_seen[i].id, feed_id) == 0) {
+      if (s_last_seen[i].seconds != seconds) {
+        s_last_seen[i].seconds = seconds;
+        // Update just this slot (a page arrival fires once per stream open).
+        persist_write_data(PERSIST_KEY_LASTSEEN_BASE + i,
+                           &s_last_seen[i], sizeof(LastSeenEntry));
+      }
+      return;
+    }
+  }
+  if (s_last_seen_count >= MAX_FEED_NODES) {
+    return; // table full: keep the newest-writer behaviour simple, drop
+  }
+  snprintf(s_last_seen[s_last_seen_count].id,
+           sizeof(s_last_seen[0].id), "%s", feed_id);
+  s_last_seen[s_last_seen_count].seconds = seconds;
+  persist_write_data(PERSIST_KEY_LASTSEEN_BASE + s_last_seen_count,
+                     &s_last_seen[s_last_seen_count], sizeof(LastSeenEntry));
+  s_last_seen_count++;
+  persist_write_int(PERSIST_KEY_LASTSEEN_COUNT, s_last_seen_count);
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +165,34 @@ void storage_load(void) {
   s_unread_only = persist_exists(PERSIST_KEY_UNREAD_ONLY)
                       ? persist_read_int(PERSIST_KEY_UNREAD_ONLY) != 0
                       : true;
+  // Smart-surface toggles: Important row / NEW-dot / Progress line default ON,
+  // Triage drain defaults OFF.
+  s_important = persist_exists(PERSIST_KEY_IMPORTANT)
+                    ? persist_read_int(PERSIST_KEY_IMPORTANT) != 0
+                    : true;
+  s_newdot = persist_exists(PERSIST_KEY_NEWDOT)
+                 ? persist_read_int(PERSIST_KEY_NEWDOT) != 0
+                 : true;
+  s_progress = persist_exists(PERSIST_KEY_PROGRESS)
+                   ? persist_read_int(PERSIST_KEY_PROGRESS) != 0
+                   : true;
+  s_triage = persist_exists(PERSIST_KEY_TRIAGE)
+                 ? persist_read_int(PERSIST_KEY_TRIAGE) != 0
+                 : false;
+
+  // Per-feed last-seen table.
+  s_last_seen_count = (int)persist_read_int(PERSIST_KEY_LASTSEEN_COUNT);
+  if (s_last_seen_count < 0 || s_last_seen_count > MAX_FEED_NODES) {
+    s_last_seen_count = 0;
+  }
+  for (int i = 0; i < s_last_seen_count; i++) {
+    int got = persist_read_data(PERSIST_KEY_LASTSEEN_BASE + i,
+                                &s_last_seen[i], sizeof(LastSeenEntry));
+    if (got != (int)sizeof(LastSeenEntry)) {
+      s_last_seen_count = i;
+      break;
+    }
+  }
 }
 
 //! Persist every settings toggle. Called after any Clay-delivered change.
@@ -74,6 +203,11 @@ void storage_save_settings(void) {
   persist_write_int(PERSIST_KEY_MARK_LIST, s_mark_list ? 1 : 0);
   persist_write_int(PERSIST_KEY_MARK_DETAIL, s_mark_detail ? 1 : 0);
   persist_write_int(PERSIST_KEY_UNREAD_ONLY, s_unread_only ? 1 : 0);
+  persist_write_int(PERSIST_KEY_IMPORTANT, s_important ? 1 : 0);
+  persist_write_int(PERSIST_KEY_NEWDOT, s_newdot ? 1 : 0);
+  persist_write_int(PERSIST_KEY_PROGRESS, s_progress ? 1 : 0);
+  persist_write_int(PERSIST_KEY_TRIAGE, s_triage ? 1 : 0);
+  storage_save_last_seen();
 }
 
 // ---------------------------------------------------------------------------
