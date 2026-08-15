@@ -192,11 +192,11 @@ Implementation (reuse-first, then custom):
 
 ### 4.3 Settings (UP from row 0)
 
-Clay page: FreshRSS URL, username, API password; behaviour: **Mark read on open
-(timeline)** + **Mark read on open (detail)** toggles (both default ON);
-appearance: dark/light, accent color, touch toggle. Watch-bound
-sub-menu: Refresh, Mark all read, Connection hint ("set server in phone app
-settings"). Mirrors launcher config split; `RequestConfig` re-sync on launch.
+Clay page: FreshRSS URL, username, API password; appearance: dark/light,
+accent color, touch toggle. Watch sub-menu (UP from root): Refresh, Mark all
+read, Connection hint, plus two flat toggle rows — **Mark read on list** and
+**Mark read on detail** (both default ON) — no submenus. Mirrors launcher
+config split; `RequestConfig` re-sync on launch.
 
 ---
 

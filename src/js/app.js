@@ -18,8 +18,9 @@
  *
  * Clay auto-handles the config webview: on save it writes 'clay-settings'
  * for page prefill and sends every watch-bound messageKey value (AccentColor,
- * DarkMode, TouchEnabled, MarkOnOpenList, MarkOnOpenDetail) to the WATCH via
- * AppMessage; the watch persists them durably. The connection fields
+ * DarkMode, TouchEnabled) to the WATCH via AppMessage; the watch persists
+ * them durably. The reading toggles live on the watch (sub-menu). The
+ * connection fields
  * (ServerUrl, User, ApiPass) are phone-side only — 'clay-settings' is the
  * prefill cache and 'headerssConfig' (CONFIG_KEY) our working copy; on
  * 'ready' we pull the watch's durable settings back and rewrite the prefill.
@@ -513,8 +514,6 @@ function handleConfigReply(payload) {
   copyIn('AccentColor');
   copyIn('DarkMode');
   copyIn('TouchEnabled');
-  copyIn('MarkOnOpenList');
-  copyIn('MarkOnOpenDetail');
   try {
     localStorage.setItem(CLAY_SETTINGS_KEY, JSON.stringify(settings));
   } catch (err) {

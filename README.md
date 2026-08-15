@@ -13,12 +13,14 @@ reading view with an accent bar, dots and a pin.
   the right edge, one dot per article (accent = unread, muted = read), star
   glyphs, pin notch on the selected row; lazy pages (50 titles) fetched only
   when you scroll near the bottom
-- **Mark read on open** — two settings toggles (list / detail), both default
-  on; switch them off to only star articles and leave them unread
+- **Mark read on open** — two toggle rows in the watch sub-menu (list /
+  detail), both default on; switch them off to only star articles and leave
+  them unread
 - **Star** — long-press SELECT in the timeline or in the detail card
-- **Settings** — UP on the top dots row opens the sub-menu (Refresh, Mark all
-  read, Connection hint); the full config page lives in the phone app
-  settings (Clay): FreshRSS URL, username, API password, appearance
+- **Settings** — UP on the top dots row opens the watch sub-menu: Refresh,
+  Mark all read, Connection hint, and the two reading toggle rows; the
+  connection/appearance page lives in the phone app settings (Clay):
+  FreshRSS URL, username, API password, theme
 - **Lean** — 96-article window in RAM, live-only data, tree cached in flash
   for instant start
 

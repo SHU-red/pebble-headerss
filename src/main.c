@@ -635,12 +635,13 @@ static void push_folder_window(const char *id, const char *name) {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-menu (UP from the root): Refresh / Mark all read / Connection
+// Sub-menu (UP from the root): Refresh / Mark all read / Connection / the two
+// reading toggles — flat, no submenus
 // ---------------------------------------------------------------------------
 
 static uint16_t sub_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
                                  void *callback_context) {
-  return 3;
+  return 5;
 }
 
 static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
@@ -651,9 +652,15 @@ static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell
   } else if (cell_index->row == 1) {
     menu_cell_basic_draw(ctx, cell_layer, "Mark all read",
                          "All articles in every feed", NULL);
-  } else {
+  } else if (cell_index->row == 2) {
     menu_cell_basic_draw(ctx, cell_layer, "Connection",
                          "How to set up the server", NULL);
+  } else if (cell_index->row == 3) {
+    menu_cell_basic_draw(ctx, cell_layer, "Mark read on list",
+                         s_mark_list ? "ON" : "OFF", NULL);
+  } else {
+    menu_cell_basic_draw(ctx, cell_layer, "Mark read on detail",
+                         s_mark_detail ? "ON" : "OFF", NULL);
   }
 }
 
@@ -665,8 +672,18 @@ static void sub_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
   } else if (cell_index->row == 1) {
     s_confirm_markall = true;
     dialog_show_confirm_text("Mark all read?\n\nSELECT: confirm\nBACK: cancel");
-  } else {
+  } else if (cell_index->row == 2) {
     dialog_show_info("Set server + API password in the phone app settings");
+  } else if (cell_index->row == 3) {
+    s_mark_list = !s_mark_list;
+    storage_save_settings();
+    vibes_short_pulse();
+    menu_layer_reload_data(menu_layer);
+  } else {
+    s_mark_detail = !s_mark_detail;
+    storage_save_settings();
+    vibes_short_pulse();
+    menu_layer_reload_data(menu_layer);
   }
 }
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- Reading options moved from the phone settings to the watch: "Mark read on
+  list" and "Mark read on detail" are now flat toggle rows in the watch
+  sub-menu (UP from the root) — no submenus; Clay page keeps connection +
+  appearance only
+
 ## 0.1.0
 
 First release.

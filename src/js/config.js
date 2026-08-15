@@ -2,12 +2,13 @@
  * HeadeRSS — Clay configuration page definition.
  *
  * Built with @rebble/clay. Watch-bound messageKeys (AccentColor, DarkMode,
- * TouchEnabled, MarkOnOpenList, MarkOnOpenDetail) match entries of the
- * "messageKeys" array in package.json so Clay sends their values to the
- * watch on save. The connection fields (ServerUrl, User, ApiPass) are
- * phone-side only: Clay persists them in 'clay-settings' for prefill and the
- * JS keeps a working copy in localStorage; they never round-trip to the
- * watch.
+ * TouchEnabled) match entries of the "messageKeys" array in package.json so
+ * Clay sends their values to the watch on save. The reading options
+ * (MarkOnOpenList/MarkOnOpenDetail) live on the WATCH in the sub-menu
+ * (toggle rows) and are not part of this page. The connection fields
+ * (ServerUrl, User, ApiPass) are phone-side only: Clay persists them in
+ * 'clay-settings' for prefill and the JS keeps a working copy in
+ * localStorage; they never round-trip to the watch.
  */
 
 module.exports = [
@@ -44,27 +45,6 @@ module.exports = [
           'type': 'password'
         },
         'description': 'FreshRSS profile → API password, NOT the login password'
-      }
-    ]
-  },
-  {
-    'type': 'section',
-    'items': [
-      {
-        'type': 'heading',
-        'defaultValue': 'Reading'
-      },
-      {
-        'type': 'toggle',
-        'messageKey': 'MarkOnOpenList',
-        'label': 'Mark read on open (list)',
-        'defaultValue': true
-      },
-      {
-        'type': 'toggle',
-        'messageKey': 'MarkOnOpenDetail',
-        'label': 'Mark read on open (detail)',
-        'defaultValue': true
       }
     ]
   },
