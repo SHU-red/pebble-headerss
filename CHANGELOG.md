@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.21
+
+- **Sidebar clock**: a 2-row clock chip (hours over minutes, e.g. 14 / 30)
+  in the accent sidebar's top — accent digits on a black rounded chip,
+  refreshed once a minute. Uses the previously wasted sidebar space.
+- **Scroll circle closed**: the chrome is tighter (heading meta 22 → 18 px,
+  body padding 6 → 4 px) so near-fit articles now actually FIT the viewport;
+  content up to 8 px over advances on ONE press (no invisible micro-scroll),
+  while genuinely long text keeps the visible ~3/4-viewport page-scroll and
+  advances only at the real last word.
+
+## 0.3.20
+
+- Star icon one size bigger (30 px chunky path), column recentered
+
 ## 0.3.19
 
 - **No fetch-hold on DOWN**: pressing DOWN while the full summary is still
