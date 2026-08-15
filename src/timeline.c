@@ -42,6 +42,8 @@ static int16_t s_view_h; // page height (window minus the top bar)
 
 static Window *s_tl_window;
 static Layer *s_root;
+static Layer *s_page_area; // holds the pages; added BEFORE the sidebar so the
+                           // accent icon bar always stays on top
 static Layer *s_top_bar;   // black bar, accent text (static)
 static TextLayer *s_top_text;
 static Layer *s_sidebar;   // accent bar with the read/unread + star icons
@@ -239,7 +241,7 @@ static void page_build(Page *p, int32_t idx) {
   p->idx = idx;
 
   p->root = layer_create(GRect(0, TOP_BAR_H, s_win_w, s_view_h));
-  layer_add_child(s_root, p->root);
+  layer_add_child(s_page_area, p->root);
 
   int16_t hh = header_height_for(a);
   p->header = layer_create(GRect(0, 0, s_win_w, hh));
@@ -332,14 +334,18 @@ static void transition_finalize(void) {
   timeline_prefetch_check();
 }
 
-//! The current page's out-animation stopped: finalize the swap.
+//! The current page's out-animation stopped: finalize the swap. On an
+//! interrupted stop (teardown unschedule) the pages are torn down by the
+//! caller instead.
 static void transition_anim_stopped(Animation *anim, bool finished, void *context) {
   if (anim != s_anim_a) {
     return;
   }
   s_anim_a = NULL;
   s_anim_b = NULL;
-  transition_finalize();
+  if (finished) {
+    transition_finalize();
+  }
 }
 
 //! Start a transition in the given direction (+1 next, -1 previous): build
@@ -368,7 +374,7 @@ static void transition_to(int8_t dir) {
 
   s_from_a = layer_get_frame(cp->root);
   s_to_a = GRect(0, TOP_BAR_H - dir * s_view_h, s_win_w, s_view_h);
-  s_anim_a = (Animation *)property_animation_create_layer_frame(cp->root, &s_to_a, &s_from_a);
+  s_anim_a = (Animation *)property_animation_create_layer_frame(cp->root, &s_from_a, &s_to_a);
   animation_set_duration(s_anim_a, 260);
   animation_set_curve(s_anim_a, AnimationCurveEaseInOut);
   animation_set_handlers(s_anim_a, (AnimationHandlers){
@@ -378,7 +384,7 @@ static void transition_to(int8_t dir) {
 
   s_from_b = layer_get_frame(sp->root);
   s_to_b = GRect(0, TOP_BAR_H, s_win_w, s_view_h);
-  s_anim_b = (Animation *)property_animation_create_layer_frame(sp->root, &s_to_b, &s_from_b);
+  s_anim_b = (Animation *)property_animation_create_layer_frame(sp->root, &s_from_b, &s_to_b);
   animation_set_duration(s_anim_b, 260);
   animation_set_curve(s_anim_b, AnimationCurveEaseInOut);
   animation_schedule(s_anim_b);
@@ -536,7 +542,10 @@ static void timeline_window_load(Window *window) {
   text_layer_set_text(s_status, s_loading ? "Loading..." : "No articles");
   layer_add_child(root, text_layer_get_layer(s_status));
 
-  // The accent sidebar overlays the pages (added last).
+  // Page area (below the sidebar in z-order) + the accent sidebar on top.
+  s_page_area = layer_create(GRect(0, TOP_BAR_H, s_win_w, s_view_h));
+  layer_add_child(root, s_page_area);
+
   s_sidebar = layer_create(GRect(s_win_w - SIDEBAR_W, TOP_BAR_H, SIDEBAR_W, s_view_h));
   layer_set_update_proc(s_sidebar, sidebar_update);
   layer_add_child(root, s_sidebar);
@@ -564,6 +573,7 @@ static void timeline_close(void) {
   page_destroy(&s_pages[0]);
   page_destroy(&s_pages[1]);
   s_root = NULL;
+  s_page_area = NULL;
   s_top_bar = NULL;
   s_top_text = NULL;
   s_sidebar = NULL;
@@ -590,6 +600,10 @@ static void timeline_window_unload(Window *window) {
   if (s_sidebar) {
     layer_destroy(s_sidebar);
     s_sidebar = NULL;
+  }
+  if (s_page_area) {
+    layer_destroy(s_page_area);
+    s_page_area = NULL;
   }
   window_destroy(s_tl_window);
   s_tl_window = NULL;

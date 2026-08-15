@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.7
+
+- Fixed the page transition: `property_animation_create_layer_frame` takes
+  (from, to) — the arguments were swapped, so the outgoing page animated from
+  its target position (no fly-out) and the incoming page ended parked below
+  the screen; the swap now slides properly in both directions
+- Fixed z-order: pages live in a dedicated area added before the accent
+  sidebar, so the icon bar is always on top of the article page
+- Interrupted transitions (teardown) no longer finalize the swap
+
 ## 0.1.6
 
 - Reader redesign per spec: black top bar with the stream name in accent;
