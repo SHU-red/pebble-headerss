@@ -29,11 +29,11 @@
 // full-height sidebar ~10 px apart, starting ~8 px from the very top.
 #define SIDEBAR_ICON_GAP 12 // vertical gap between the indicators
 #define SIDEBAR_DISC_D 20   // read/unread disc diameter
-#define SIDEBAR_STAR_H 20    // fav star height
-#define SIDEBAR_MAG_H 20    // match magnifier glyph height
+#define SIDEBAR_STAR_H 24   // fav star height
+#define SIDEBAR_MAG_H 24    // match magnifier glyph height
 // The indicator column is vertically centered beside the physical SELECT
-// button (right edge, mid-screen): total stack = 20+12+20+12+20 = 84 px.
-#define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 84) / 2)
+// button (right edge, mid-screen): total stack = 24+12+20+12+24 = 92 px.
+#define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 92) / 2)
 
 // Highlight alarm color: the highlight M badge and ALL matched words (body
 // and title) share this one color so the connection is obvious.
@@ -180,13 +180,13 @@ static Animation *s_anim_b; // spare page slides in
 static GRect s_from_a, s_to_a, s_from_b, s_to_b;
 static AppTimer *s_transition_watchdog; // failsafe: releases a wedged transition
 
-// Shared draw path: a star (~20 px) — the favourite indicator in the
+// Shared draw path: a star (~24 px) — the favourite indicator in the
 // sidebar. Orange when starred, black otherwise.
 static const GPathInfo STAR_ICON_INFO = {
   .num_points = 10,
   .points = (GPoint[10]){
-    { 0, -7 }, { 2, -2 }, { 7, -2 }, { 3, 1 }, { 5, 7 },
-    { 0, 4 }, { -5, 7 }, { -3, 1 }, { -7, -2 }, { -2, -2 },
+    { 0, -9 }, { 2, -2 }, { 9, -3 }, { 4, 1 }, { 7, 9 },
+    { 0, 5 }, { -7, 9 }, { -4, 1 }, { -9, -3 }, { -2, -2 },
   },
 };
 
@@ -288,10 +288,11 @@ static void top_bar_update(Layer *layer, GContext *ctx) {
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 }
 
-//! Thin accent divider between the top bar and the scrollable page.
+//! Thin white divider between the top bar and the scrollable page (matches
+//! the menu group dividers).
 static void divider_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
-  graphics_context_set_fill_color(ctx, s_accent);
+  graphics_context_set_fill_color(ctx, GColorWhite);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 }
 
@@ -341,10 +342,10 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
   GColor mag_c = matched ? HL_ALARM_COLOR : GColorBlack;
   graphics_context_set_stroke_color(ctx, mag_c);
   graphics_context_set_stroke_width(ctx, 2);
-  GPoint center = GPoint(cx - 1, y + SIDEBAR_MAG_H / 2 - 2);
-  graphics_draw_circle(ctx, center, 6);
-  graphics_draw_line(ctx, GPoint(center.x + 5, center.y + 5),
-                     GPoint(center.x + 9, center.y + 9));
+  GPoint center = GPoint(cx, y + SIDEBAR_MAG_H / 2 - 3);
+  graphics_draw_circle(ctx, center, 8);
+  graphics_draw_line(ctx, GPoint(center.x + 6, center.y + 6),
+                     GPoint(center.x + 11, center.y + 11));
 }
 
 // ---------------------------------------------------------------------------
@@ -1244,6 +1245,7 @@ static void transition_finalize(void) {
   }
   mark_timer_start(s_idx);
   full_summary_request(s_idx);
+  full_summary_apply(); // heal: apply a completed fetch if the chunk path missed it
   if (s_sidebar) {
     layer_mark_dirty(s_sidebar);
   }
@@ -1353,28 +1355,31 @@ static void maybe_regress(void) {
 // Buttons
 // ---------------------------------------------------------------------------
 
-//! UP scrolls the body up; past the top (content offset back at 0) it goes
-//! back to the previously read article (still in the ring from this
-//! session). The SDK's offset is the content origin: negative when scrolled,
-//! 0 at the top.
+//! UP scrolls the article up by one viewport; at the top it goes back to
+//! the previously read article (still in the ring from this session). The
+//! SDK's offset is the content origin: negative when scrolled, 0 at the top.
 static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing) {
     return;
   }
   ScrollLayer *scroll = cur_page()->scroll;
-  if (scroll_layer_get_content_offset(scroll).y < 0) {
-    scroll_layer_scroll_up_click_handler(rec, scroll);
+  GPoint offset = scroll_layer_get_content_offset(scroll);
+  if (offset.y < 0) {
+    GRect frame = layer_get_frame(scroll_layer_get_layer(scroll));
+    int32_t target = offset.y + (frame.size.h - 24);
+    if (target > 0) {
+      target = 0;
+    }
+    scroll_layer_set_content_offset(scroll, GPoint(0, target), true);
   } else {
     maybe_regress();
   }
 }
 
-//! DOWN scrolls the body; at the bottom (or when it all fits) it advances
-//! to the next article instead — EXCEPT while the full summary of the
-//! current article is still loading: the 80-char preview does not fill the
-//! screen, and advancing then would skip the article the user is trying to
-//! read. Stay (scroll is a no-op on the short preview) until the full text
-//! lands and scrolling becomes possible.
+//! DOWN scrolls the article by one viewport (page-down); at the true bottom
+//! of the text it advances to the next article. While the full summary is
+//! still loading the advance is blocked (the short preview would skip the
+//! article); scrolling is a no-op on the preview.
 static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing || s_advance_guard) {
     return;
@@ -1385,15 +1390,26 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   GPoint offset = scroll_layer_get_content_offset(scroll);
   // The SDK clips the content offset to [frame.h - content.h, 0] — the
   // content origin: 0 at the top, NEGATIVE when scrolled, frame.h-content.h
-  // at the very bottom. "At the bottom" is therefore offset.y <=
-  // frame.h - content.h (+2 slack), NOT a positive comparison.
+  // at the very bottom. "At the bottom" is offset.y <= frame.h-content.h.
   bool at_bottom = (offset.y <= frame.size.h - content.h + 2);
   bool fetching_here = (s_full_idx == s_idx && s_full_fetching && !s_full_done);
-  if (!fetching_here && at_bottom) {
-    maybe_advance();
-  } else {
-    scroll_layer_scroll_down_click_handler(rec, scroll);
+  if (fetching_here) {
+    return; // hold: the full text is on its way; do not skip the article
   }
+  if (at_bottom) {
+    maybe_advance();
+    return;
+  }
+  // Page-down: one viewport per press (a small overlap keeps the previous
+  // screen's last line visible for context); the final press lands exactly
+  // on the bottom so the last word is clearly visible.
+  int32_t step = frame.size.h - 24;
+  int32_t target = offset.y - step;
+  int32_t min_y = frame.size.h - content.h;
+  if (target < min_y) {
+    target = min_y;
+  }
+  scroll_layer_set_content_offset(scroll, GPoint(0, target), true);
 }
 
 //! SELECT toggles the current article's read state (unread -> mark read via
@@ -1811,6 +1827,7 @@ void timeline_collect_article(DictionaryIterator *iter) {
     }
     mark_timer_start(0);
     full_summary_request(0);
+    full_summary_apply(); // heal: apply a completed fetch if missed earlier
     timeline_prefetch_check();
   }
 }

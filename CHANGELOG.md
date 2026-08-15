@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.10
+
+- **Page-scroll**: DOWN now scrolls the article by a full viewport per press
+  (animated, with a small overlap so the previous screen's last line stays
+  in view) and only advances at the true bottom of the text — a proper
+  "scroll to the end, then next" reading flow instead of 32 px nudges and
+  confusing no-ops. The final press lands exactly on the bottom so the last
+  word is clearly visible. UP page-scrolls back symmetrically.
+- **Full text reliability**: if a completed full-summary fetch ever missed
+  its apply (article changed mid-stream), the settle now re-applies it —
+  long articles reliably show their full text instead of the short preview.
+- **Star and magnifier bigger** (24 px vs the 20 px circle), star outline
+  thicker; the indicator column recentered.
+- **Divider line under the top bar is white** (matches the menu group
+  dividers).
+
 ## 0.3.9
 
 - **The stuck-at-the-end bug, root-caused at the SDK level**: Pebble's
