@@ -30,6 +30,11 @@ static AppTimer *s_mark_timer;
 //! updates that stream's last-seen (NEW-dot support).
 static char s_fetch_stream[48];
 
+// Full-summary request retry state (outbox-busy handling).
+static AppTimer *s_summary_retry_timer;
+static uint8_t s_summary_retries;
+static char s_summary_retry_id[24];
+
 //! Send the queued ids as one CSV MarkRead payload, then reset the queue.
 static void mark_send_batch(void) {
   if (s_mark_count == 0) {
@@ -177,16 +182,60 @@ void proto_mark_all_read(const char *stream) {
 //! back as FullSummary chunks (+ SummaryLast on the final one) which
 //! proto_handle_inbox hands to the timeline reader. `id` is the article's
 //! decimal microsecond id (as kept in Article.id).
+//! The send can hit a busy outbox (the auto-mark batch flushes ~500 ms after
+//! every settle, exactly when the summary request fires) — a dropped request
+//! would leave the article as a short preview. Retry APP_MSG_BUSY a few
+//! times; the timeline's fetch watchdog bounds the total wait.
+static AppTimer *s_summary_retry_timer;
+static uint8_t s_summary_retries;
+
+static void summary_retry_cb(void *data) {
+  s_summary_retry_timer = NULL;
+  if (s_summary_retries >= 3) {
+    return;
+  }
+  s_summary_retries++;
+  DictionaryIterator *iter;
+  AppMessageResult res = app_message_outbox_begin(&iter);
+  if (res == APP_MSG_BUSY) {
+    s_summary_retry_timer =
+        app_timer_register(400, summary_retry_cb, NULL);
+    return;
+  }
+  if (res == APP_MSG_OK) {
+    dict_write_cstring(iter, MESSAGE_KEY_FetchSummary, s_summary_retry_id);
+    dict_write_end(iter);
+    app_message_outbox_send();
+  }
+  APP_LOG(APP_LOG_LEVEL_INFO, "summary: request retried -> %d", (int)res);
+}
+
 void proto_request_summary(const char *id) {
+  if (s_summary_retry_timer) {
+    app_timer_cancel(s_summary_retry_timer);
+    s_summary_retry_timer = NULL;
+  }
+  copy_str(s_summary_retry_id, sizeof(s_summary_retry_id),
+           id ? id : "");
+  s_summary_retries = 0;
   DictionaryIterator *iter;
   AppMessageResult res = app_message_outbox_begin(&iter);
   if (res == APP_MSG_OK) {
-    dict_write_cstring(iter, MESSAGE_KEY_FetchSummary, id ? id : "");
-    res = app_message_outbox_send();
+    dict_write_cstring(iter, MESSAGE_KEY_FetchSummary, s_summary_retry_id);
+    dict_write_end(iter);
+    app_message_outbox_send();
+    APP_LOG(APP_LOG_LEVEL_INFO, "summary: request sent (%s)",
+            s_summary_retry_id);
+    return;
   }
-  if (res != APP_MSG_OK) {
-    APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchSummary (%d)", (int)res);
+  if (res == APP_MSG_BUSY) {
+    // Outbox busy (mark batch flush): retry shortly.
+    s_summary_retry_timer =
+        app_timer_register(400, summary_retry_cb, NULL);
+    APP_LOG(APP_LOG_LEVEL_INFO, "summary: outbox busy, retrying");
+    return;
   }
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchSummary (%d)", (int)res);
 }
 
 //! Toggle one article back to unread on the server (removes the read tag).

@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.3.10
+## 0.3.12
+
+- **Full-summary fetch reliability**: the FetchSummary request could hit a
+  busy AppMessage outbox (the auto-mark batch flushes ~500 ms after every
+  article settles — exactly when the summary request fires); a dropped
+  request left long articles as short previews, so DOWN appeared to jump
+  article-to-article without ever scrolling. The request now retries on a
+  busy outbox (up to 3×) and the fetch watchdog was extended 3 s → 8 s to
+  cover slower BLE chunk streams. The phone-side chunk flow was verified
+  end-to-end (1604-char summary streams in one chunk + SummaryLast).
+- Diagnostics: `summary:` log lines (request sent/retried, chunk bytes,
+  complete/empty, preview-is-full skip) — if any article still fails, the
+  next log names the exact link.
+
+## 0.3.11
 
 - **Page-scroll**: DOWN now scrolls the article by a full viewport per press
   (animated, with a small overlap so the previous screen's last line stays

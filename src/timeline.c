@@ -961,13 +961,17 @@ static void full_summary_request(int32_t idx) {
   }
   const Article *a = &s_articles[idx];
   if (strlen(a->summary) < (size_t)(sizeof(a->summary) - 1)) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "summary: idx %ld preview is full, no fetch",
+            (long)idx);
     return; // the preview wasn't truncated: it already is the full summary
   }
   s_full_idx = idx;
   s_full_fetching = true;
   proto_request_summary(a->id);
   full_summary_hint_update();
-  s_full_watchdog = app_timer_register(3000, full_summary_watchdog_cb, NULL);
+  s_full_watchdog = app_timer_register(8000, full_summary_watchdog_cb, NULL);
+  APP_LOG(APP_LOG_LEVEL_INFO, "summary: fetch idx %ld id %s", (long)idx,
+          a->id);
 }
 
 //! The assembled full text replaced the preview: re-layout the current page
@@ -1053,12 +1057,18 @@ void timeline_full_summary_chunk(const char *text, bool last) {
     if (!s_full_summary || s_full_len == 0) {
       // Empty/errored fetch (SummaryLast alone): keep the preview, close
       // the fetch and drop the hint.
+      APP_LOG(APP_LOG_LEVEL_INFO, "summary: fetch empty/errored, keep preview");
       full_summary_reset();
       full_summary_hint_update();
       return;
     }
+    APP_LOG(APP_LOG_LEVEL_INFO, "summary: complete, %u bytes", 
+            (unsigned)s_full_len);
     full_summary_apply();
+    return;
   }
+  APP_LOG(APP_LOG_LEVEL_INFO, "summary: chunk %u bytes",
+          (unsigned)tlen);
 }
 
 // ---------------------------------------------------------------------------
