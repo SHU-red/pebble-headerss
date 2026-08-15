@@ -285,10 +285,16 @@ function createClient(baseUrl, username, apiPass, opts) {
   function getTree(cb) {
     var subsUrl = base + API_BASE + '/reader/api/0/subscription/list?output=json';
     var countsUrl = base + API_BASE + '/reader/api/0/unread-count?output=json';
+    // The GReader unread-count/tag-list endpoints have no starred breakdown;
+    // count the starred stream directly (n=0 = all ids on FreshRSS).
+    var starsUrl = base + API_BASE +
+      '/reader/api/0/stream/items/ids?s=user/-/state/com.google/starred' +
+      '&n=0&output=json';
     var subs = null;
     var counts = null;
+    var starredCount = 0;
     var firstErr = null;
-    var pending = 2;
+    var pending = 3;
 
     function finish() {
       pending -= 1;
@@ -299,7 +305,7 @@ function createClient(baseUrl, username, apiPass, opts) {
         cb(firstErr);
         return;
       }
-      cb(null, mergeTree(subs, counts));
+      cb(null, mergeTree(subs, counts, starredCount));
     }
 
     request('GET', subsUrl, null, function (err, resp) {
@@ -326,9 +332,20 @@ function createClient(baseUrl, username, apiPass, opts) {
       }
       finish();
     });
+    request('GET', starsUrl, null, function (err, resp) {
+      if (!err) {
+        try {
+          var parsed = JSON.parse(resp.text);
+          starredCount = (parsed && parsed.itemRefs) ? parsed.itemRefs.length : 0;
+        } catch (e) {
+          // count stays 0; the badge simply shows nothing
+        }
+      }
+      finish();
+    });
   }
 
-  function mergeTree(subsResp, countsResp) {
+  function mergeTree(subsResp, countsResp, starredCount) {
     var countsMap = {};
     var newestMap = {};
     var unreadCounts = countsResp && countsResp.unreadcounts;
@@ -358,7 +375,7 @@ function createClient(baseUrl, username, apiPass, opts) {
       type: 0,
       id: STARRED,
       name: 'Starred',
-      unread: 0,
+      unread: starredCount || 0,
       newest: '0',
       parent: ''
     });

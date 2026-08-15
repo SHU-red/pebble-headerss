@@ -1212,6 +1212,7 @@ static void transition_finalize(void) {
       Article *a = &s_articles[s_idx];
       a->star = 0;
       proto_star(a->id, 0);
+      tree_starred_adjust(-1); // drained: the Starred badge follows
     }
   }
   mark_timer_start(s_idx);
@@ -1401,6 +1402,7 @@ static void timeline_star_long_click(ClickRecognizerRef rec, void *ctx) {
   Article *a = &s_articles[s_idx];
   a->star = !a->star;
   proto_star(a->id, a->star);
+  tree_starred_adjust(a->star ? 1 : -1); // the root menu's Starred badge
   vibes_short_pulse();
   if (s_sidebar) {
     layer_mark_dirty(s_sidebar);

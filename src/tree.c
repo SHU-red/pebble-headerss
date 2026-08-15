@@ -85,14 +85,13 @@ void tree_fetch_done(void) {
 // ---------------------------------------------------------------------------
 
 void tree_compute_unread(void) {
-  // Folders are recomputed from their subtree; the starred special is always
-  // 0 (starring is a boolean flag, not a count); the reading-list special
+  // Folders are recomputed from their subtree; the starred special keeps
+  // the phone-reported star count (the GReader API has no starred breakdown,
+  // so the JS counts the starred stream itself); the reading-list special
   // keeps the server-reported count.
   for (int i = 0; i < s_node_count; i++) {
     FeedNode *n = &s_nodes[i];
     if (n->kind == 1) {
-      n->unread = 0;
-    } else if (n->kind == 0 && strcmp(n->id, STARRED_ID) == 0) {
       n->unread = 0;
     }
   }
@@ -114,6 +113,17 @@ void tree_compute_unread(void) {
       pid = p->parent;
     }
   }
+}
+
+//! Optimistic star-count adjustment (star on: +1, off: -1, floored at 0) so
+//! the root menu's Starred badge follows in-session star toggles.
+void tree_starred_adjust(int delta) {
+  FeedNode *n = find_node(STARRED_ID);
+  if (!n) {
+    return;
+  }
+  int32_t v = n->unread + delta;
+  n->unread = v < 0 ? 0 : v;
 }
 
 //! Optimistic badge update after a mark-read batch: the feed's own counter

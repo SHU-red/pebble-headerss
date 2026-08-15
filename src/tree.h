@@ -34,6 +34,8 @@ void tree_compute_unread(void);
 //! Optimistic badge update after a mark-read: decrement the feed and every
 //! ancestor (folders + the reading-list special), flooring at 0.
 void tree_feed_decrement(const char *feed_id);
+//! Optimistic Starred-badge adjustment (star on: +1, off: -1, floored 0).
+void tree_starred_adjust(int delta);
 
 //! Row mapping for the root menu: specials + top-level folders + top-level
 //! feeds, in tree_sort() order (specials pinned, folders, then feeds sorted

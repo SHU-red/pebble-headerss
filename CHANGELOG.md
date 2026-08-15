@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3
+
+- **Starred badge now shows the real star count** (it was hardcoded 0): the
+  GReader unread-count/tag-list endpoints have no starred breakdown, so the
+  phone counts the starred stream directly (`stream/items/ids`, one extra
+  parallel request in the tree fetch) and the watch no longer force-zeroes
+  the Starred row. In-session star toggles (long-press, and the Starred
+  triage drain) adjust the badge optimistically.
+
 ## 0.3.2
 
 - **Stuck reader fixed (three causes)**:
