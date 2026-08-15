@@ -22,6 +22,12 @@
   animations before the next transition destroys their layers; regressing
   below a ring drop during a prefetch rebuilds the reader page instead of
   showing a blank screen.
+- **Item stream survives dropped acks**: a lost AppMessage ack used to kill
+  the item send chain silently — the ring stayed partial (e.g. 1 of 33
+  articles) while the count showed the full page, so the reader appeared
+  stuck on the first entry ("can't advance although 33 articles are
+  shown"). Item sends now retry twice and the watch dedups by id, so a
+  re-send after a lost ack cannot duplicate and the page always completes.
 
 ## 0.3.23
 

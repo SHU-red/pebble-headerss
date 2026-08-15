@@ -1969,6 +1969,18 @@ void timeline_page_begin(int32_t n) {
 //! (bounds-checked; overflow drops the oldest from the front). The first
 //! article of the stream brings the reader up.
 void timeline_collect_article(DictionaryIterator *iter) {
+  // Dedup by id: the phone may re-send an item after a lost ack (send retry)
+  // or the server may repeat an id across a continuation boundary. A
+  // duplicate must not take a ring slot or shift the reader's position.
+  Tuple *id_t = dict_find(iter, MESSAGE_KEY_ItemId);
+  const char *new_id = id_t ? id_t->value->cstring : "";
+  if (new_id[0]) {
+    for (int32_t i = 0; i < s_count; i++) {
+      if (strcmp(s_articles[i].id, new_id) == 0) {
+        return; // already collected: skip
+      }
+    }
+  }
   bool first = (s_count == 0);
   if (s_count >= MAX_ARTICLES) {
     memmove(s_articles, &s_articles[1], (size_t)(s_count - 1) * sizeof(Article));

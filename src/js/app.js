@@ -331,7 +331,8 @@ function itemsFlow(stream, cont, n, unreadOnly) {
  * @param {string} continuation
  * @param {number} generation - items generation; a stale chain aborts
  */
-function sendItems(items, newest, continuation, generation) {
+function sendItems(items, newest, continuation, generation, retries) {
+  retries = retries || 0;
   if (generation !== itemsGeneration) {
     return;
   }
@@ -341,19 +342,39 @@ function sendItems(items, newest, continuation, generation) {
   Pebble.sendAppMessage(dict, function () {
     sendItemChain(items, 0, continuation, generation);
   }, function (err) {
-    console.log('items: failed to send ItemCount: ' + JSON.stringify(err));
+    // A dropped ItemCount would leave the watch stuck on "Loading..."
+    // forever (no page_begin): retry before giving up.
+    if (retries < 2) {
+      console.log('items: failed to send ItemCount, retrying');
+      setTimeout(function () {
+        if (generation === itemsGeneration) {
+          sendItems(items, newest, continuation, generation, retries + 1);
+        }
+      }, 250);
+    } else {
+      console.log('items: failed to send ItemCount: ' + JSON.stringify(err));
+      sendItemCont('', generation); // unblock the watch
+    }
   });
 }
 
 /**
  * Send one item, then the next, chained on success; the continuation is
  * sent after the last item.
+ * A dropped ack must not silently kill the stream: without a retry the
+ * watch's ring stays partial (e.g. 1 of 33 articles) while the count shows
+ * the full page — the reader then blocks at "last article" although the
+ * stream is not finished. Each item is retried twice, then skipped so the
+ * page still completes; the watch dedups by id (timeline_collect_article),
+ * so a re-send after a lost ack cannot duplicate the article.
  * @param {Array<Object>} items
  * @param {number} index
  * @param {string} continuation
  * @param {number} generation - items generation; a stale chain aborts
+ * @param {number} retries - consecutive send failures on this item
  */
-function sendItemChain(items, index, continuation, generation) {
+function sendItemChain(items, index, continuation, generation, retries) {
+  retries = retries || 0;
   if (generation !== itemsGeneration) {
     return;
   }
@@ -372,9 +393,19 @@ function sendItemChain(items, index, continuation, generation) {
   dict.ItemRead = item.read;
   dict.ItemStar = item.star;
   Pebble.sendAppMessage(dict, function () {
-    sendItemChain(items, index + 1, continuation, generation);
+    sendItemChain(items, index + 1, continuation, generation, 0);
   }, function (err) {
-    console.log('items: failed to send item ' + item.id + ': ' + JSON.stringify(err));
+    if (retries < 2) {
+      console.log('items: send failed for ' + item.id + ', retrying');
+      setTimeout(function () {
+        if (generation === itemsGeneration) {
+          sendItemChain(items, index, continuation, generation, retries + 1);
+        }
+      }, 250);
+    } else {
+      console.log('items: giving up on ' + item.id + ', continuing');
+      sendItemChain(items, index + 1, continuation, generation, 0);
+    }
   });
 }
 
