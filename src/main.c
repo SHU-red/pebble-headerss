@@ -306,12 +306,27 @@ void ui_result(int code, const char *text) {
     dialog_create();
   }
   char msg[96];
-  snprintf(msg, sizeof(msg), "%s", (text && text[0]) ? text : "Error");
+  // Bounded copy (no snprintf): the vfprintf machinery is a deep frame on
+  // the 2 KB basalt-class stack, and this runs in the inbox callback.
+  {
+    size_t i = 0;
+    const char *src = (text && text[0]) ? text : "Error";
+    while (i + 1 < sizeof(msg) && src[i]) {
+      msg[i] = src[i];
+      i++;
+    }
+    msg[i] = '\0';
+  }
   if (contains_ci(msg, "login") || contains_ci(msg, "401") ||
       contains_ci(msg, "unauthorized")) {
+    const char *hint = "\n\nSet API password in phone settings";
     size_t l = strlen(msg);
-    snprintf(msg + l, sizeof(msg) - l,
-             "\n\nSet API password in phone settings");
+    size_t k = 0;
+    while (l + k + 1 < sizeof(msg) && hint[k]) {
+      msg[l + k] = hint[k];
+      k++;
+    }
+    msg[l + k] = '\0';
   }
   dialog_show_final(false, msg);
 }

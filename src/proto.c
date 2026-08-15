@@ -7,6 +7,11 @@
 #include "timeline.h"
 #include "common.h"
 
+// Shallow stack helpers (defined at the bottom): used by proto_handle_inbox,
+// which must avoid deep libc frames (strtoll/vfprintf) on the 2 KB stack.
+static int64_t parse_decimal(const char *s);
+static void copy_str(char *dst, size_t cap, const char *src);
+
 // ---------------------------------------------------------------------------
 // AppMessage codec (see proto.h). Every send is fire-and-forget with a log
 // on failure; the mark-read path is batched so rapid reading does not flood
@@ -32,11 +37,17 @@ static void mark_send_batch(void) {
     return;
   }
   char csv[MARK_BATCH_MAX * 24]; // 12 x 23 chars + 11 commas + NUL
-  csv[0] = '\0';
-  for (uint8_t i = 0; i < s_mark_count; i++) {
-    size_t l = strlen(csv);
-    snprintf(csv + l, sizeof(csv) - l, "%s%s", i ? "," : "", s_mark_ids[i]);
+  size_t l = 0;
+  for (uint8_t i = 0; i < s_mark_count && l + 1 < sizeof(csv); i++) {
+    if (i > 0 && l + 1 < sizeof(csv)) {
+      csv[l++] = ',';
+    }
+    size_t k = 0;
+    while (k + 1 < sizeof(csv) - l && s_mark_ids[i][k]) {
+      csv[l++] = s_mark_ids[i][k++];
+    }
   }
+  csv[l] = '\0';
   DictionaryIterator *iter;
   if (app_message_outbox_begin(&iter) == APP_MSG_OK) {
     dict_write_cstring(iter, MESSAGE_KEY_MarkRead, csv);
@@ -61,7 +72,7 @@ void proto_mark_push(const char *id) {
     }
     return;
   }
-  snprintf(s_mark_ids[s_mark_count++], sizeof(s_mark_ids[0]), "%s", id);
+  copy_str(s_mark_ids[s_mark_count++], sizeof(s_mark_ids[0]), id);
   if (s_mark_count >= MARK_BATCH_MAX) {
     if (s_mark_timer) {
       app_timer_cancel(s_mark_timer);
@@ -104,7 +115,7 @@ void proto_request_tree(void) {
 //! Request one page of a stream; cont "" asks for the first page.
 void proto_request_items(const char *stream, const char *cont) {
   if (stream && stream[0]) {
-    snprintf(s_fetch_stream, sizeof(s_fetch_stream), "%s", stream);
+    copy_str(s_fetch_stream, sizeof(s_fetch_stream), stream);
   }
   DictionaryIterator *iter;
   AppMessageResult res = app_message_outbox_begin(&iter);
@@ -198,7 +209,7 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     APP_LOG(APP_LOG_LEVEL_INFO, "startup: result %ld", (long)code);
     char text_buf[96];
     Tuple *text_t = dict_find(iter, MESSAGE_KEY_ResultText);
-    snprintf(text_buf, sizeof(text_buf), "%s",
+    copy_str(text_buf, sizeof(text_buf),
              text_t ? text_t->value->cstring : "");
     ui_result(code, text_buf);
     return;
@@ -228,7 +239,7 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     }
     if ((t = dict_find(iter, MESSAGE_KEY_FeedNewest))) {
       // Decimal microseconds string; 0/absent when the feed has no items.
-      newest = strtoll(t->value->cstring, NULL, 10);
+      newest = parse_decimal(t->value->cstring);
     }
     if ((t = dict_find(iter, MESSAGE_KEY_FeedParent))) {
       parent = t->value->cstring;
@@ -245,7 +256,7 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     // The NEW-dot then compares the tree's per-feed newest against this.
     Tuple *newest_t = dict_find(iter, MESSAGE_KEY_FeedNewest);
     if (newest_t) {
-      int64_t usec = strtoll(newest_t->value->cstring, NULL, 10);
+      int64_t usec = parse_decimal(newest_t->value->cstring);
       if (usec > 0) {
         storage_feed_set_last_seen(s_fetch_stream, usec / 1000000);
       }
@@ -313,6 +324,48 @@ void proto_handle_inbox(DictionaryIterator *iter) {
   }
 
   APP_LOG(APP_LOG_LEVEL_INFO, "Unrecognized AppMessage payload");
+}
+
+//! Bounded decimal parse for the FeedNewest microseconds string. Deliberately
+//! NOT libc strtoll: newlib's strtoll/_strtoll_l have deep stack frames, and
+//! the app stack is only 2 KB on basalt-class platforms — the parse runs
+//! inside the AppMessage inbox callback, whose chain already overflows.
+static int64_t parse_decimal(const char *s) {
+  if (!s) {
+    return 0;
+  }
+  int64_t v = 0;
+  bool neg = false;
+  if (*s == '-') {
+    neg = true;
+    s++;
+  }
+  while (*s >= '0' && *s <= '9') {
+    int64_t nv = v * 10 + (*s - '0');
+    if (nv < v) {
+      return neg ? INT64_MIN : INT64_MAX; // clamp on overflow
+    }
+    v = nv;
+    s++;
+  }
+  return neg ? -v : v;
+}
+
+//! Bounded string copy with forced NUL. Replaces snprintf("%s") in the
+//! inbox path: newlib's vfprintf machinery is the deepest frame there.
+static void copy_str(char *dst, size_t cap, const char *src) {
+  if (!cap) {
+    return;
+  }
+  if (!src) {
+    src = "";
+  }
+  size_t i = 0;
+  while (i + 1 < cap && src[i]) {
+    dst[i] = src[i];
+    i++;
+  }
+  dst[i] = '\0';
 }
 
 // ---------------------------------------------------------------------------

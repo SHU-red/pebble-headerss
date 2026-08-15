@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.4
+
+- **Startup crash — deep libc frames removed from the inbox path.** The
+  0.2.3 markers pinned the fault to the first tree-node processing, and the
+  faulting PC (0x5c80) sat directly past the `strtoll` symbol in rodata:
+  newlib's `strtoll`/`_strtoll_l` and the `snprintf`→`vfprintf` machinery
+  have deep stack frames, and the AppMessage inbox callback runs on the
+  2 KB basalt-class app stack — the FeedNewest parse plus three node
+  `snprintf`s overflowed it, corrupting a return address into the rodata
+  right after `strtoll`.
+  Fix: hand-rolled `parse_decimal` (20 B frame, replaces `strtoll`) and
+  `copy_str` (bounded, replaces `snprintf("%s")`) in the inbox path;
+  `tree_add_node` now uses `strncpy`+NUL; the mark-read CSV join, mark id
+  store and fetch-stream copy no longer use `snprintf` either. The inbox
+  chain dropped from ~1.4 KB to ~300 B of stack. `snprintf` remains only
+  in render/dialog/persist paths.
+- Startup markers kept (`startup: tree requested / result / count /
+  menu reload`).
+
 ## 0.2.3
 
 - **Startup crash — menu animation / dialog interplay removed.** Crash

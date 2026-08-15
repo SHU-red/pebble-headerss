@@ -32,9 +32,15 @@ void tree_add_node(int32_t kind, const char *id, const char *name,
     return;
   }
   FeedNode *n = &s_nodes[s_node_count++];
-  snprintf(n->id, sizeof(n->id), "%s", id ? id : "");
-  snprintf(n->name, sizeof(n->name), "%s", name ? name : "");
-  snprintf(n->parent, sizeof(n->parent), "%s", parent ? parent : "");
+  // strncpy + forced NUL (NOT snprintf: newlib's vfprintf has a deep stack
+  // frame and this runs inside the AppMessage inbox callback on the 2 KB
+  // basalt-class stack).
+  strncpy(n->id, id ? id : "", sizeof(n->id) - 1);
+  n->id[sizeof(n->id) - 1] = '\0';
+  strncpy(n->name, name ? name : "", sizeof(n->name) - 1);
+  n->name[sizeof(n->name) - 1] = '\0';
+  strncpy(n->parent, parent ? parent : "", sizeof(n->parent) - 1);
+  n->parent[sizeof(n->parent) - 1] = '\0';
   n->kind = (uint8_t)(kind < 0 ? 0 : (kind > 2 ? 2 : kind));
   n->unread = unread;
   n->newest = newest;
