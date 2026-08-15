@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.18
+
+- **One press per article again**: the scroll air (0.3.16) made every
+  article require two DOWN presses (a meaningless ~100 px scroll through
+  empty margin first). The air is removed; articles whose text fits the
+  viewport (or grazes it by ≤1 line) advance on ONE press, while genuinely
+  long text keeps the visible ~3/4-viewport page-scroll. Short articles:
+  one clean press to the next article — long articles: scroll, then
+  advance at the real last word.
+
 ## 0.3.17
 
 - **Progress bar reaches the sidebar exactly**: the bar's width is capped
