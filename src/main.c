@@ -487,7 +487,7 @@ static bool new_pill_active(const FeedNode *node) {
   if (!setting_newdot() || !node || node->kind != 2 || node->unread <= 0) {
     return false;
   }
-  int64_t newest_s = node->newest / 1000000;
+  int64_t newest_s = div_million(node->newest);
   return newest_s > storage_feed_last_seen(node->id);
 }
 

@@ -18,12 +18,15 @@
 //   9  ProgressLine (int32, smart-surface toggle; default ON)
 //   10 TreeCount (int32)
 //   11 TriageDrain (int32, smart-surface toggle; default OFF)
-//   12 LastSeenCount (int32)
+//   12 (retired: LastSeenCount — 0.3.0 layout, moved to 15; swept on load)
 //   13 HighlightWords (string CSV: comma-separated highlight words from Clay,
 //      max 10 entries of 32 bytes each, <= 340 B stored)
 //   14 MarkMode (int32: MarkMode enum, default MARK_NOW)
+//   15 LastSeenCount (int32)
 //   20+i  Tree cache: FeedNode blob per node (<= 256 B each)
-//   100+i LastSeen: {char id[48]; int64_t seconds;} per feed (<= 256 B each)
+//   100+i (retired: 0.3.0 last-seen blobs — 56 B {char id[48]; int64_t};
+//      moved to 200+i; keys 100..163 swept on load)
+//   200+i LastSeen: {char id[16]; int64_t seconds;} per feed (24 B each)
 // ---------------------------------------------------------------------------
 
 #define PERSIST_KEY_ACCENT 1     // int32: 24-bit hex of the accent color
@@ -39,11 +42,15 @@
 #define PERSIST_KEY_PROGRESS 9   // int32: 1 = progress line on the top bar
 #define PERSIST_KEY_TREE_COUNT 10 // int32: number of cached tree nodes
 #define PERSIST_KEY_TRIAGE 11    // int32: 1 = triage drain from Starred
-#define PERSIST_KEY_LASTSEEN_COUNT 12 // int32: number of last-seen entries
+#define PERSIST_KEY_LASTSEEN_COUNT 15 // int32: number of last-seen entries
 #define PERSIST_KEY_HIGHLIGHT 13 // string CSV: highlight words (<= 340 B)
 #define PERSIST_KEY_MARK_MODE 14 // int32: MarkMode enum (default MARK_NOW)
+// Retired in 0.3.1 (24 B entries moved to key 15 / base 200): kept only so
+// storage_load can sweep the stale flash entries on first run.
+#define PERSIST_KEY_LASTSEEN_COUNT_OLD 12 // int32 (retired): 0.3.0 count
+#define PERSIST_KEY_LASTSEEN_BASE_OLD 100 // + i (retired): 0.3.0 56 B entries
 #define PERSIST_KEY_TREE_BASE 20  // + i: FeedNode blobs (<= 256 B each)
-#define PERSIST_KEY_LASTSEEN_BASE 100 // + i: last-seen entries (<= 256 B each)
+#define PERSIST_KEY_LASTSEEN_BASE 200 // + i: last-seen entries (24 B each)
 
 #define TREE_CACHE_MAX 32 // cap persisted nodes (persist size budget)
 
@@ -51,7 +58,7 @@
 
 //! One per-feed last-seen entry (seconds granularity).
 typedef struct {
-  char id[48];     // stream id ("feed/N", ...)
+  char id[16];     // stream id ("feed/N", ...); 16 B covers "feed/N" + NUL
   int64_t seconds; // last-seen unix seconds, from FeedNewest/1000000
 } LastSeenEntry;
 
@@ -303,7 +310,19 @@ void storage_load(void) {
                  ? persist_read_int(PERSIST_KEY_TRIAGE) != 0
                  : false;
 
-  // Per-feed last-seen table.
+  // Per-feed last-seen table. First retire the 0.3.0 layout: the count lived
+  // at key 12 with 56 B entries at 100+i ({char id[48]; int64_t}). Ids are
+  // only ever "feed/N", so entries shrank to 24 B and moved to 200+i (count
+  // at 15). Sweep the stale flash entries once; key 12's absence means the
+  // sweep already ran.
+  if (persist_exists(PERSIST_KEY_LASTSEEN_COUNT_OLD)) {
+    persist_delete(PERSIST_KEY_LASTSEEN_COUNT_OLD);
+    for (int i = 0; i < 64; i++) { // old cap was 64 slots (keys 100..163)
+      if (persist_exists(PERSIST_KEY_LASTSEEN_BASE_OLD + i)) {
+        persist_delete(PERSIST_KEY_LASTSEEN_BASE_OLD + i);
+      }
+    }
+  }
   s_last_seen_count = (int)persist_read_int(PERSIST_KEY_LASTSEEN_COUNT);
   if (s_last_seen_count < 0 || s_last_seen_count > MAX_FEED_NODES) {
     s_last_seen_count = 0;

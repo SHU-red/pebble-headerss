@@ -286,7 +286,7 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     if (newest_t) {
       int64_t usec = parse_decimal(newest_t->value->cstring);
       if (usec > 0) {
-        storage_feed_set_last_seen(s_fetch_stream, usec / 1000000);
+        storage_feed_set_last_seen(s_fetch_stream, div_million(usec));
       }
     }
     timeline_page_begin(t->value->int32);

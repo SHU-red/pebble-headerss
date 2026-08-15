@@ -266,7 +266,7 @@ function createClient(baseUrl, username, apiPass, opts) {
       title: String(item.title || '(no title)').slice(0, 80),
       feed: (item.origin && item.origin.title) || '',
       feedId: (item.origin && item.origin.streamId) || '',
-      summary: stripHtml(item.summary && item.summary.content || '').slice(0, 140),
+      summary: stripHtml(item.summary && item.summary.content || '').slice(0, 80),
       time: item.published | 0,
       read: hasCategory(item, 'com.google/read') ? 1 : 0,
       star: hasCategory(item, 'com.google/starred') ? 1 : 0

@@ -40,6 +40,31 @@
 #define REQUEST_TIMEOUT_MS 12000
 #define TIMELINE_ROW_H 72
 
+//! Divide a 64-bit value by 1,000,000 without a 64-bit division libcall
+//! (the toolchain's __udivmoddi4 links in 754 B of .text). Binary long
+//! division: the running remainder stays < 2e6, so it fits a uint32 and all
+//! per-step arithmetic is 32-bit; the quotient (always < 2^62 for int64
+//! magnitudes) is built as int64. Negative input is negated first (unsigned
+//! negation, well-defined even for INT64_MIN).
+static inline int64_t div_million(int64_t v) {
+  const int neg = v < 0;
+  uint64_t u = (uint64_t)v; // two's-complement bit pattern
+  if (neg) {
+    u = 0u - u; // magnitude (bit 63 set only for INT64_MIN)
+  }
+  uint64_t q = 0;
+  uint32_t r = 0; // remainder mod 1e6, always < 2e6
+  for (int b = 63; b >= 0; b--) {
+    r = (r << 1) | (uint32_t)((u >> b) & 1u);
+    q <<= 1;
+    if (r >= 1000000u) {
+      r -= 1000000u;
+      q |= 1u;
+    }
+  }
+  return neg ? -(int64_t)q : (int64_t)q;
+}
+
 //! One node of the feed tree as streamed by the phone.
 //! kind: 0 special (reading-list / starred), 1 folder, 2 feed.
 typedef struct {
@@ -118,7 +143,7 @@ typedef struct {
   char title[80];    // full article title (the header renders it multi-line, no cap)
   char feed[24];     // feed display name
   char feed_id[16];  // "feed/N"
-  char summary[140]; // stripped summary text
+  char summary[81];  // 80-char preview; full text is fetched on demand
   int32_t published; // unix seconds
   uint8_t read;
   uint8_t star;

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.3.1 — optimization + reader polish
+
+- **Resource optimization** (from the audit): summary preview 140 → 80
+  chars (−59 B/article, full text still fetched on demand), last-seen
+  entries 56 → 24 B (keys moved 12/100+i → 15/200+i, retired blobs swept),
+  hand-rolled `div_million` removes the 754 B 64-bit division libcall.
+  Result: emery 64.3 → 57.4 KB of the 65,535 B budget (margin 1.2 → 8.2 KB),
+  basalt 57.6 → 51.8 KB, basalt heap free 7.9 → 13.7 KB (full summaries now
+  fit on the 64 KB class too)
+- **No black gap**: the page root had a double offset (page area y=26 plus
+  an additional y=26 inside) — the heading now starts flush at y=26
+- **Sidebar to the upper edge**: the accent bar spans the full screen
+  height (y=0) with the icons at the top
+- **Monochrome icons, bigger**: read/unread = filled 16 px circle (white =
+  unread, black = read, no mixed eye), star = 18 px GPath (white =
+  favourited), M = 18 px bold glyph — inactive all black; active "M" and
+  every matched word light up in the same alarm red (GColorRed) so the
+  sidebar M ↔ match connection is obvious
+- **Underline fixed**: the match underline sat at the baseline/through the
+  x-height (read as a strikethrough) — it now hugs the bottom of the line
+  box
+- **DOWN = scroll first, advance at the limit**: scrolling/flinging to the
+  article bottom no longer auto-advances; a further DOWN press at the limit
+  opens the next article
+- **Stuck advance fixed**: an interrupted page transition left
+  `s_advancing` locked forever ("sometimes can't go to the next article") —
+  interrupted stops now release the locks and rebuild the spare page safely
+- **Progress starts at 0**: the bar used the live article count (1/1 = 100%
+  on entry); it now divides by the announced page size, so it starts at ~2%
+  and grows with the loaded window
+- Heading already rendered bold (kept)
+
 ## 0.3.0 — reading overhaul
 
 - **Auto mark as read** replaces the "on list"/"on detail" toggles: one
