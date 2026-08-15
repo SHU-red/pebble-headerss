@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.6
+
+- **Connection info (and every result dialog) fixed**: a pulse-tick callback
+  that had already fired before the result arrived ran *after* the result
+  text was set and overwrote it with "Loading…" again (then rescheduled) —
+  so final results never stayed visible. A final-state flag now stops the
+  pulse from clobbering results. Multiline results (the Connection account
+  block) additionally drop to GOTHIC_18_BOLD so all lines fit the dialog.
+
 ## 0.3.5
 
 - **Context menu is full screen** (long-press SELECT on a feed/folder) —

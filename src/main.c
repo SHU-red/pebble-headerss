@@ -37,6 +37,7 @@ static AppTimer *s_dismiss_timer;
 static AppTimer *s_pulse_timer;
 static bool s_dialog_active;
 static bool s_dialog_dismissing; // async pop in flight (unload not yet run)
+static bool s_dialog_final;      // a final result is shown; stop pulsing
 static bool s_dialog_confirm;
 static bool s_confirm_markall; // the confirm dialog is about Mark all read
 static char s_markall_stream[48]; // stream the confirm targets ("" = reading list)
@@ -173,7 +174,7 @@ static void request_timeout_cb(void *data) {
 //! unload), so this callback can be queued behind the cancel that popped
 //! the dialog — touching the freed text layer then faults the app.
 static void pulse_tick_cb(void *data) {
-  if (!s_dialog_active || !s_dialog_text) {
+  if (!s_dialog_active || !s_dialog_text || s_dialog_final) {
     return;
   }
   static const char *dots[] = { "", ".", "..", "..." };
@@ -230,6 +231,7 @@ static void dialog_create(void) {
 
   s_dialog_active = true;
   s_dialog_dismissing = false;
+  s_dialog_final = false;
   window_stack_push(s_dialog_window, false);
 }
 
@@ -250,6 +252,9 @@ static void dialog_show_working(const char *text) {
   if (!s_dialog_active) {
     dialog_create();
   }
+  s_dialog_final = false;
+  text_layer_set_font(s_dialog_text,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   snprintf(s_working_label, sizeof(s_working_label), "%s", text ? text : "");
   dialog_prepare(GColorGreen, s_working_label);
   s_pulse_phase = 3;
@@ -261,6 +266,13 @@ static void dialog_show_working(const char *text) {
 static void dialog_show_final(bool success, const char *text) {
   if (!s_dialog_active) {
     return;
+  }
+  s_dialog_final = true;
+  // Multiline results (e.g. the Connection account block) get the smaller
+  // font so all lines fit the dialog's text area.
+  if (text && strchr(text, '\n')) {
+    text_layer_set_font(s_dialog_text,
+                        fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   }
   dialog_prepare(success ? GColorGreen : GColorRed, text);
   if (!success) {
@@ -287,6 +299,7 @@ static void dialog_unload(Window *window) {
   s_dialog_window = NULL;
   s_dialog_active = false;
   s_dialog_dismissing = false;
+  s_dialog_final = false;
 }
 
 // ---------------------------------------------------------------------------
