@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.22
+
+- **Starred stream never unread-filters**: the "Unread only" toggle was
+  being applied to the Starred stream too, so only the unread subset of
+  starred articles loaded (e.g. 2 of 33 — hence a 50% progress bar and
+  nowhere to navigate). Starred is a curated list: ALL starred articles now
+  load and you can hop through them one by one. The reading list and
+  feed/folder streams keep their unread filtering.
+
 ## 0.3.21
 
 - **Sidebar clock**: a 2-row clock chip (hours over minutes, e.g. 14 / 30)

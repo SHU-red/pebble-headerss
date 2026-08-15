@@ -490,8 +490,11 @@ function createClient(baseUrl, username, apiPass, opts) {
       url += '&c=' + cont;
     }
     // Unread-only: the reading-list stream always filters; feed/folder
-    // streams filter when the watch's "Unread only" setting is on.
-    if (String(stream || '') === READING_LIST || unreadOnly) {
+    // streams filter when the watch's "Unread only" setting is on. The
+    // Starred stream is a curated list — NEVER filtered, the user wants
+    // every starred article (hopping through them one by one).
+    if (String(stream || '') === READING_LIST ||
+        (unreadOnly && String(stream || '') !== STARRED)) {
       url += '&xt=' + READ_TAG;
     }
     request('GET', url, null, function (err, resp) {
