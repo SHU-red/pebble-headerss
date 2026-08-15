@@ -188,11 +188,16 @@ void proto_reply_config(void) {
 void proto_handle_inbox(DictionaryIterator *iter) {
   Tuple *t;
 
-  // Generic result/error channel.
+  // Generic result/error channel. Copy the text out of the inbox buffer:
+  // ui_result can build a dialog (allocations) and the inbox pointer must
+  // not outlive the callback handling.
   if ((t = dict_find(iter, MESSAGE_KEY_ResultCode))) {
     int32_t code = t->value->int32;
+    char text_buf[96];
     Tuple *text_t = dict_find(iter, MESSAGE_KEY_ResultText);
-    ui_result(code, text_t ? text_t->value->cstring : "");
+    snprintf(text_buf, sizeof(text_buf), "%s",
+             text_t ? text_t->value->cstring : "");
+    ui_result(code, text_buf);
     return;
   }
 

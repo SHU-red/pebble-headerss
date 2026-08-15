@@ -531,9 +531,12 @@ static void hl_build_layout(const HlBuildParams *p) {
 
   int16_t base_space = hl_measure_text(" ", p->base_font);
   int16_t hl_space = hl_measure_text(" ", p->hl_font);
-  char scratch[141]; // longest slice: Article.summary[140]
+  // Static scratch: the engine is single-threaded and re-layouts happen one
+  // at a time. Keeping these off the stack matters — the app stack is only
+  // 2 KB on basalt-class watches and this frame was 584 B.
+  static char scratch[141]; // longest slice: Article.summary[140]
+  static HlSpan spans[HL_SPANS_MAX];
 
-  HlSpan spans[HL_SPANS_MAX];
   int nspans = hl_collect_spans(t, spans, HL_SPANS_MAX);
 
   int16_t line_x = 0;     // width consumed on the current line

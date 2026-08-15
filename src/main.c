@@ -271,6 +271,28 @@ bool ui_result_active(void) {
 //! dialog green. The working dialog is repainted in place (launcher idiom)
 //! rather than popped and re-created: the unload callback is asynchronous,
 //! so popping here and creating a fresh dialog would race on the flag.
+//! Bounded case-insensitive substring test. Deliberately NOT strstr: libc's
+//! strstr (two-way algorithm) has a deep stack frame, and the app stack is
+//! only 2 KB on the basalt-class platforms — a stack overflow there faulted
+//! with a corrupted PC inside strstr's internals at startup.
+static bool contains_ci(const char *hay, const char *needle) {
+  size_t hl = strlen(hay);
+  size_t nl = strlen(needle);
+  if (nl == 0 || nl > hl) {
+    return false;
+  }
+  for (size_t i = 0; i + nl <= hl; i++) {
+    size_t k = 0;
+    while (k < nl && ((hay[i + k] | 0x20) == (needle[k] | 0x20))) {
+      k++;
+    }
+    if (k == nl) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void ui_result(int code, const char *text) {
   if (code == 0) {
     if (s_dialog_active) {
@@ -283,9 +305,10 @@ void ui_result(int code, const char *text) {
   if (!s_dialog_active) {
     dialog_create();
   }
-  char msg[192];
+  char msg[96];
   snprintf(msg, sizeof(msg), "%s", (text && text[0]) ? text : "Error");
-  if (strstr(msg, "login") || strstr(msg, "401") || strstr(msg, "Unauthorized")) {
+  if (contains_ci(msg, "login") || contains_ci(msg, "401") ||
+      contains_ci(msg, "unauthorized")) {
     size_t l = strlen(msg);
     snprintf(msg + l, sizeof(msg) - l,
              "\n\nSet API password in phone settings");

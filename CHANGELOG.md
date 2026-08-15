@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.2
+
+- **Startup crash fixed (root cause)**: basalt/chalk/diorite run on a 2 KB
+  app stack (PebbleOS: `APP_STACK_NORMAL_SIZE` 4 KB on emery/gabbro, 2 KB
+  elsewhere — verified in `src/fw/process_management/app_manager.c`). The
+  startup AppMessage chain (inbox callback → `ui_result` → dialog build →
+  `text_layer_set_text` → SDK text layout, plus libc `strstr`'s deep
+  two-way algorithm frame) overflowed it → corrupted return address → hard
+  fault with a corrupted PC (crash logs showed PC mid-instruction inside
+  `strstr` and a constant RAM LR = the stack region).
+  Fix: replaced `strstr` with a bounded case-insensitive matcher
+  (`contains_ci`, no deep libc frame), shrank `ui_result`'s buffer
+  192→96 B, copied ResultText out of the AppMessage inbox before dialog
+  work, and moved the highlight engine's 269 B of scratch (layout spans +
+  slice buffer) off the stack. `ui_result` frame 208→112 B,
+  `hl_build_layout` 584→304 B; the `strstr` crash site no longer exists
+  in the binary.
+- The earlier pulse-timer use-after-free fix (0.2.1) stays — it was a real
+  bug ("Timer does not exist") but not this crash.
+
 ## 0.2.1
 
 - **Word highlighting**: enter up to 10 words/phrases in the phone app
