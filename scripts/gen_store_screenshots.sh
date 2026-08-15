@@ -2,12 +2,14 @@
 # Generate the Rebbble-store main screenshots: resources/store/main_<platform>.png
 # for all five platforms (basalt, chalk, diorite, emery, gabbro).
 #
-# REQUIRES a machine WITH a display (the emulator needs X/SDL; on headless
-# machines the display freezes and the app cannot be driven reliably).
-#
-# The phone-side config (FreshRSS URL/user/API password) must be set once in
-# the Pebble app for the emulator — otherwise the app shows the
-# "Set server in phone settings" dialog instead of the feed tree.
+# REQUIRES:
+#  - a machine WITH a display (the emulator needs X/SDL; on headless machines
+#    the display freezes and screenshots never update past the app's first frame)
+#  - scripts/apply_pypkjs_patches.sh run once (lets the emulator's JS reach
+#    a LAN FreshRSS server)
+#  - the phone-side config set once in the Pebble app for the emulator
+#    (FreshRSS URL / user / API token), otherwise the app shows
+#    "No feeds yet" or the "Set server in phone settings" dialog
 #
 # Run from the project root:  scripts/gen_store_screenshots.sh
 set -u
@@ -22,36 +24,17 @@ if [ ! -f "$PBW" ]; then
   exit 1
 fi
 
+# pebble screenshot --all-platforms boots each platform's emulator, installs
+# the app (which auto-launches it), and captures. The 15 s settle after the
+# install (patched into pebble-tool) lets the app fetch the feed tree first.
+pebble screenshot --all-platforms --no-open || exit 1
+
 for p in basalt chalk diorite emery gabbro; do
-  echo "=== $p ==="
-  # Boot the emulator (starts qemu + pypkjs; needs a display).
-  pebble emu-control --emulator "$p" >/tmp/emu_${p}.log 2>&1 &
-  EMU_PID=$!
-  # Wait for the emulator to come up (the tool prints the QR/URL page).
-  sleep 30
-
-  pebble install --emulator "$p" "$PBW" || { echo "install failed on $p"; kill $EMU_PID; continue; }
-
-  # Set the advertising time (10:10) so the sidebar clock reads nicely.
-  pebble emu-set-time --emulator "$p" 10 10 2>/dev/null || true
-
-  # Launcher: the app is one DOWN from the watchface; SELECT launches it.
-  pebble emu-button --emulator "$p" click down
-  sleep 2
-  pebble emu-button --emulator "$p" push select
-  sleep 1
-  pebble emu-button --emulator "$p" release select
-
-  # App start + tree fetch + first full summaries.
-  sleep 20
-
-  pebble screenshot --emulator "$p" --no-open "$STORE/main_${p}.png" \
-    && echo "saved $STORE/main_${p}.png"
-
-  # Shut this platform's emulator down.
-  pebble kill 2>/dev/null || true
-  kill $EMU_PID 2>/dev/null || true
-  sleep 2
+  latest=$(ls -t screenshots/${p}_*.png 2>/dev/null | head -1)
+  if [ -n "$latest" ]; then
+    cp "$latest" "$STORE/main_${p}.png"
+    echo "saved $STORE/main_${p}.png"
+  fi
 done
 
 echo "Done: $STORE/main_*.png"
