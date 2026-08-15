@@ -353,18 +353,34 @@ static int16_t main_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index
   return cell_index->row == 0 ? 15 : 46;
 }
 
-//! Right-aligned unread badge; only drawn when > 0 (accent, black on the
-//! accent selection).
+//! Permanent accent spine on the right edge (Timeline style); on the accent
+//! selection row it inverts to black so it stays visible.
+static void draw_spine(GContext *ctx, GRect b, bool selected) {
+  graphics_context_set_fill_color(ctx, selected ? GColorBlack : s_accent);
+  graphics_fill_rect(ctx, GRect(b.size.w - 6, 0, 4, b.size.h), 0, GCornerNone);
+}
+
+//! Right-aligned unread badge as a filled accent pill (black count); on the
+//! accent selection row the pill inverts (black pill, white count).
 static void draw_badge(GContext *ctx, GRect b, int32_t unread, bool selected) {
   if (unread <= 0) {
     return;
   }
   char num[12];
   snprintf(num, sizeof(num), "%ld", (long)unread);
-  graphics_context_set_text_color(ctx, selected ? GColorBlack : s_accent);
+  int d = 1;
+  int32_t v = unread;
+  while ((v /= 10) > 0) {
+    d++;
+  }
+  int16_t pw = 14 + d * 8; // pill width grows with the digit count
+  GRect pill = GRect(b.size.w - 12 - pw, (b.size.h - 16) / 2, pw, 16);
+  graphics_context_set_fill_color(ctx, selected ? GColorBlack : s_accent);
+  graphics_fill_rect(ctx, pill, 8, GCornersAll);
+  graphics_context_set_text_color(ctx, selected ? GColorWhite : GColorBlack);
   graphics_draw_text(ctx, num, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                     GRect(b.size.w - 34, (b.size.h - 18) / 2, 30, 18),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+                     GRect(pill.origin.x, pill.origin.y - 1, pill.size.w, pill.size.h),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
 //! Folder marker: small right-pointing triangle; feeds/specials get none.
@@ -383,10 +399,12 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
   GRect bounds = layer_get_bounds(cell_layer);
 
   if (row == 0) {
-    // Narrow entry row: three horizontal accent dots, centered.
+    // Accent strip: the UP entry row doubles as the app's color header.
+    graphics_context_set_fill_color(ctx, s_accent);
+    graphics_fill_rect(ctx, bounds, 0, GCornerNone);
     int16_t cx = bounds.size.w / 2;
     int16_t cy = bounds.size.h / 2;
-    graphics_context_set_fill_color(ctx, s_accent);
+    graphics_context_set_fill_color(ctx, GColorBlack);
     for (int i = -1; i <= 1; i++) {
       graphics_fill_circle(ctx, GPoint(cx + i * 6, cy), 2);
     }
@@ -407,6 +425,7 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
   // Row background: accent when selected, theme otherwise.
   graphics_context_set_fill_color(ctx, selected ? s_accent : theme_bg());
   graphics_fill_rect(ctx, b, 0, GCornerNone);
+  draw_spine(ctx, b, selected);
 
   int16_t text_x = 8;
   if (node->kind == 1) {
@@ -540,6 +559,7 @@ static void folder_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
 
   graphics_context_set_fill_color(ctx, selected ? s_accent : theme_bg());
   graphics_fill_rect(ctx, b, 0, GCornerNone);
+  draw_spine(ctx, b, selected);
 
   const char *label;
   int32_t unread;
@@ -646,6 +666,9 @@ static uint16_t sub_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
 
 static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
                          void *callback_context) {
+  GRect b = layer_get_bounds(cell_layer);
+  bool selected = menu_layer_is_index_selected(s_sub_menu, (MenuIndex *)cell_index);
+  draw_spine(ctx, b, selected);
   if (cell_index->row == 0) {
     menu_cell_basic_draw(ctx, cell_layer, "Refresh",
                          "Reload feeds from the server", NULL);

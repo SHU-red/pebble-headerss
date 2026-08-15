@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.5
+
+- Modern look: dark theme by default; accent color made prominent — root
+  menu's top row is a full accent strip, every menu has a permanent accent
+  right spine, unread counts are filled accent pills (black count), selected
+  rows stay accent-filled
+- Reader now shows the read state: the header bar and the progress pin are
+  accent for unread articles, dark gray for read ones
+- Page slide transition smoothed (260 ms)
+
 ## 0.1.4
 
 - Fixed: Clay-delivered accent color was truncated to gray (24-bit RGB was

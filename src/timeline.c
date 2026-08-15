@@ -158,34 +158,40 @@ static void top_bar_update(Layer *layer, GContext *ctx) {
   graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 }
 
-//! The pin: a small accent notch at the current article's progress, base to
-//! the left, apex on the spine (drawn via a shared GPath — the SDK has no
-//! graphics_fill_triangle).
+//! The pin: a small notch at the current article's progress, base to the
+//! left, apex on the spine. Its color carries the read state: accent =
+//! unread, dark gray = read.
 static void pin_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   if (!s_pin_gpath) {
     return;
   }
-  graphics_context_set_fill_color(ctx, s_accent);
+  const Article *a = current_article();
+  graphics_context_set_fill_color(ctx, (a && a->read) ? GColorDarkGray : s_accent);
   gpath_move_to(s_pin_gpath, GPoint(0, b.size.h / 2));
   gpath_draw_filled(ctx, s_pin_gpath);
 }
 
 //! Accent header bar: heading (bold, up to 2 lines, ellipsized) and the
-//! feed·time line, both GColorBlack on the accent; a yellow star on the
-//! right when the article is starred.
+//! feed·time line. The bar color carries the read state: accent + black
+//! text for UNREAD, dark gray + white text for READ; a yellow star with a
+//! black outline on the right when the article is starred.
 static void header_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
 
-  graphics_context_set_fill_color(ctx, s_accent);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-
   const Article *a = current_article();
   if (!a) {
+    graphics_context_set_fill_color(ctx, s_accent);
+    graphics_fill_rect(ctx, b, 0, GCornerNone);
     return;
   }
 
-  graphics_context_set_text_color(ctx, GColorBlack);
+  GColor bar = a->read ? GColorDarkGray : s_accent;
+  GColor bar_text = a->read ? GColorWhite : GColorBlack;
+  graphics_context_set_fill_color(ctx, bar);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+
+  graphics_context_set_text_color(ctx, bar_text);
   graphics_draw_text(ctx, a->title, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
                      GRect(4, 2, b.size.w - 8 - STAR_PAD, HEADING_MAX_H),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
@@ -194,13 +200,13 @@ static void header_update(Layer *layer, GContext *ctx) {
   char t[16];
   format_reltime(t, sizeof(t), a->published);
   snprintf(meta, sizeof(meta), "%s · %s", a->feed, t);
-  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_context_set_text_color(ctx, bar_text);
   graphics_draw_text(ctx, meta, fonts_get_system_font(FONT_KEY_GOTHIC_14),
                      GRect(4, b.size.h - 18, b.size.w - 8, 16),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
   if (a->star && s_star_path) {
-    // Yellow star with a black outline so it reads on any accent color.
+    // Yellow star with a black outline so it reads on any bar color.
     gpath_move_to(s_star_path, GPoint(b.size.w - 18, b.size.h / 2));
     graphics_context_set_stroke_color(ctx, GColorBlack);
     graphics_context_set_stroke_width(ctx, 2);
@@ -438,7 +444,7 @@ static void slide_phase1_stopped(Animation *anim, bool finished, void *context) 
   s_slide_from = layer_get_frame(s_container);
   s_slide_to = GRect(0, TOP_BAR_H, s_win_w, s_view_h);
   s_slide_anim = (Animation *)property_animation_create_layer_frame(s_container, &s_slide_to, &s_slide_from);
-  animation_set_duration(s_slide_anim, 220);
+  animation_set_duration(s_slide_anim, 260);
   animation_set_curve(s_slide_anim, AnimationCurveEaseOut);
   animation_set_handlers(s_slide_anim, (AnimationHandlers){
     .stopped = slide_phase2_stopped,
@@ -458,7 +464,7 @@ static void slide_start(int8_t dir) {
   s_slide_from = layer_get_frame(s_container);
   s_slide_to = GRect(0, TOP_BAR_H - dir * s_view_h, s_win_w, s_view_h);
   s_slide_anim = (Animation *)property_animation_create_layer_frame(s_container, &s_slide_to, &s_slide_from);
-  animation_set_duration(s_slide_anim, 220);
+  animation_set_duration(s_slide_anim, 260);
   animation_set_curve(s_slide_anim, AnimationCurveEaseIn);
   animation_set_handlers(s_slide_anim, (AnimationHandlers){
     .stopped = slide_phase1_stopped,

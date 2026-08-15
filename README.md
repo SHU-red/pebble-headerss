@@ -31,8 +31,13 @@ reading view with an accent bar, dots and a pin.
   server for feed/folder streams; "All unread" always shows only unread
 - **Star** — long-press SELECT toggles the star; starred articles show a
   yellow star icon
-- **Settings** — UP on the top dots row opens the watch sub-menu: Refresh,
-  Mark all read, Connection hint, and the two reading toggle rows; the
+- **Modern look** — dark theme by default, accent color everywhere: accent
+  top strip on the root menu, permanent accent right spine in every menu,
+  unread counts as filled accent pills, accent-selected rows; in the reader
+  the header bar and pin carry the read state (accent = unread, dark gray =
+  read)
+- **Settings** — UP on the top accent strip opens the watch sub-menu:
+  Refresh, Mark all read, Connection hint, reading toggles, Unread only; the
   connection/appearance page lives in the phone app settings (Clay):
   FreshRSS URL, username, API password, theme
 - **Lean** — 96-article window in RAM, live-only data, tree cached in flash

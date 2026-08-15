@@ -49,7 +49,8 @@ void storage_load(void) {
     accent_hex = DEFAULT_ACCENT_HEX;
   }
   s_accent = GColorFromHEX(accent_hex);
-  s_dark = persist_read_int(PERSIST_KEY_DARK) != 0;
+  // Dark theme is the app's look (Timeline-style); missing key = dark.
+  s_dark = persist_exists(PERSIST_KEY_DARK) ? persist_read_int(PERSIST_KEY_DARK) != 0 : true;
   s_touch = persist_read_int(PERSIST_KEY_TOUCH) != 0;
   // persist_read_int returns 0 for missing keys, which would read as OFF;
   // the mark-read toggles default to ON for fresh installs.
