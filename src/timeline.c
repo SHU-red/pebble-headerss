@@ -1488,7 +1488,7 @@ static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
     if (target > 0) {
       target = 0;
     }
-    scroll_layer_set_content_offset(scroll, GPoint(0, target), true);
+    scroll_layer_set_content_offset(scroll, GPoint(0, target), false);
   } else {
     maybe_regress();
   }
@@ -1524,7 +1524,18 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   // viewport — a sub-perceptual sliver of the last line) advance on ONE
   // press instead of performing an invisible 8 px scroll. Genuinely long
   // text (a full line or more over) keeps the visible page-scroll.
+  // EXCEPT while the full summary of this article is still loading: the
+  // preview is short BECAUSE the fetch is in flight, not because the article
+  // is short — advancing then would skip the article the user is reading.
+  // Hold; the (repeating) press scrolls once the full text lands.
   if (content.h <= frame.size.h + 8) {
+    bool fetching_here = (s_full_idx == s_idx && s_full_fetching &&
+                          !s_full_done);
+    if (fetching_here) {
+      APP_LOG(APP_LOG_LEVEL_INFO,
+              "nav: fetch in flight, preview fits — hold");
+      return;
+    }
     APP_LOG(APP_LOG_LEVEL_INFO, "nav: fits (cont=%d frame=%d), advance",
             content.h, frame.size.h);
     maybe_advance();
@@ -1540,7 +1551,7 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
     target = min_y;
   }
   APP_LOG(APP_LOG_LEVEL_INFO, "nav: page-down %d -> %d", offset.y, (int)target);
-  scroll_layer_set_content_offset(scroll, GPoint(0, target), true);
+  scroll_layer_set_content_offset(scroll, GPoint(0, target), false);
 }
 
 //! SELECT toggles the current article's read state (unread -> mark read via
