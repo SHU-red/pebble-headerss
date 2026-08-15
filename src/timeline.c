@@ -8,22 +8,20 @@
 
 // ---------------------------------------------------------------------------
 // Timeline reading view (see timeline.h). Article headings + summaries
-// stream in from the phone into a ring buffer; pages are dropped from the
-// head when the buffer fills and re-fetched via continuation. The reader is
-// a paged full-screen view in the style of the native Timeline app: one
-// article per page — an accent header bar (heading + feed·time, yellow star
-// when starred), a scrollable summary body, a permanent accent spine with a
-// gliding progress pin, and a two-phase slide transition between articles.
+// stream in from the phone into a ring buffer. The reader is a paged
+// full-screen view: a black top bar (stream name in accent), one article per
+// page — an accent header bar (heading + feed·time), a scrollable summary
+// body — and a thick accent SIDEBAR on the right holding the read/unread dot
+// and the star icon. Page changes slide with a continuous two-page
+// transition (the outgoing page leaves while the incoming one enters — no
+// teleport cut).
 // ---------------------------------------------------------------------------
 
-#define SPINE_W 4        // accent spine width
-#define PIN_W 11         // pin notch: base..apex (apex sits on the spine)
-#define PIN_H 10
-#define TOP_BAR_H 24     // accent top bar showing the folder/feed name
-#define HEADER_FLOOR 52  // minimum header height
-#define HEADER_META_H 22 // feed·time line + padding below the heading
-#define HEADING_MAX_H 42 // two GOTHIC_18 lines
-#define STAR_PAD 26      // right-side room for the star icon in the heading box
+#define TOP_BAR_H 24      // black top bar with the stream name
+#define SIDEBAR_W 26      // thick accent sidebar holding the icons
+#define HEADER_FLOOR 52   // minimum header height
+#define HEADER_META_H 22  // feed·time line + padding below the heading
+#define HEADING_MAX_H 42  // two GOTHIC_18 lines
 
 static Article s_articles[MAX_ARTICLES];
 static int32_t s_count;
@@ -31,31 +29,49 @@ static char s_stream[48]; // current stream id
 static char s_cont[24];   // next continuation; "" = all loaded
 static bool s_loading;
 static bool s_loaded_all;
-static char s_title[24]; // stream title (kept for the open() contract)
+static char s_title[24]; // stream title (top bar)
 
 static int32_t s_idx;        // current article (ring-buffer index)
-static bool s_advancing;     // true while the slide transition runs
+static bool s_advancing;     // true while a page transition runs
 static bool s_advance_guard; // at most one advance per article
-static GPoint s_last_offset; // last scroll offset seen
+static GPoint s_last_offset; // last scroll offset seen (current page)
 
 static int16_t s_win_w;
 static int16_t s_win_h;
-static int16_t s_view_h; // container height (window minus the top bar)
-static int16_t s_header_h; // dynamic per article
+static int16_t s_view_h; // page height (window minus the top bar)
 
 static Window *s_tl_window;
-static Layer *s_top_bar;   // accent top bar with the stream name (static)
+static Layer *s_root;
+static Layer *s_top_bar;   // black bar, accent text (static)
 static TextLayer *s_top_text;
-static Layer *s_container;   // holds every page surface; slides on advance
-static Layer *s_header_bar;  // accent header (dynamic height)
-static ScrollLayer *s_scroll; // summary body
-static TextLayer *s_body;    // wrapped summary, recreated per article
-static Layer *s_spine;       // 4 px accent bar, full window height
-static Layer *s_pin;         // progress notch on the spine
-static TextLayer *s_status;  // full-screen "Loading..." / "No articles"
+static Layer *s_sidebar;   // accent bar with the read/unread + star icons
+static TextLayer *s_status; // full-screen "Loading..." / "No articles"
 
-// Shared draw path: a 5-point star (~16 px), drawn in the header when the
-// current article is starred.
+// One article page: everything that slides during a transition. Two pages
+// exist so the transition can animate them against each other.
+typedef struct {
+  Layer *root;        // container layer (slides)
+  Layer *header;      // accent header (dynamic height)
+  ScrollLayer *scroll; // summary body
+  TextLayer *body;    // wrapped summary, recreated per page
+  int32_t idx;        // ring index this page shows
+} Page;
+
+static Page s_pages[2];
+static int s_cur; // index of the current page in s_pages
+
+static Page *cur_page(void) { return &s_pages[s_cur]; }
+static Page *spare_page(void) { return &s_pages[1 - s_cur]; }
+
+// Transition state: direction, target index, the two page-frame animations
+// (from/to frames must outlive the animations).
+static int8_t s_dir;
+static int32_t s_target_idx;
+static Animation *s_anim_a; // current page slides out
+static Animation *s_anim_b; // spare page slides in
+static GRect s_from_a, s_to_a, s_from_b, s_to_b;
+
+// Shared draw path: a 5-point star (~16 px) drawn in the sidebar.
 static const GPathInfo STAR_PATH_INFO = {
   .num_points = 10,
   .points = (GPoint[10]){
@@ -66,44 +82,16 @@ static const GPathInfo STAR_PATH_INFO = {
 
 static GPath *s_star_path;
 
-//! The pin notch: right-pointing triangle (base left, apex right, at the
-//! spine), repositioned with gpath_move_to per draw.
-static const GPathInfo PIN_PATH_INFO = {
-  .num_points = 3,
-  .points = (GPoint[3]){ { 0, -4 }, { 8, 0 }, { 0, 4 } },
-};
-
-static GPath *s_pin_gpath;
-
-// ---------------------------------------------------------------------------
-// Advance transition: a two-phase slide of the container (header + body +
-// spine + pin). Phase 1 slides the current page up and out (ease-in); on
-// stopped, the next article is loaded and the container, parked below the
-// window, slides back up (ease-out). Property animations of the container
-// frame; the from/to frames live in statics for the animation's lifetime.
-// ---------------------------------------------------------------------------
-
-static Animation *s_slide_anim;
-static GRect s_slide_from;
-static GRect s_slide_to;
-static int8_t s_slide_dir; // +1 = next (slide up), -1 = previous (slide down)
-
-// Pin glide: an int-lerp of the pin's y within the container (launcher
-// idiom), marking the pin dirty per frame — no float math.
-static int16_t s_pin_cur; // current pin y
-static int16_t s_pin_from;
-static int16_t s_pin_to;
-static Animation *s_pin_anim;
-
 static void timeline_prefetch_check(void);
+static void timeline_content_offset_changed(ScrollLayer *scroll, void *context);
 static void article_mark_read(int32_t idx);
 static void maybe_advance(void);
 static void maybe_regress(void);
-static void slide_start(int8_t dir);
-static void load_article_content(void);
-static void pin_reposition(bool glide);
+static void transition_to(int8_t dir);
+static void page_build(Page *p, int32_t idx);
+static void page_destroy(Page *p);
 static void status_update(void);
-static void slide_phase2_stopped(Animation *anim, bool finished, void *context);
+static void transition_anim_stopped(Animation *anim, bool finished, void *context);
 
 //! The article currently under the reader, or NULL when the buffer is empty.
 static const Article *current_article(void) {
@@ -143,85 +131,98 @@ static void format_reltime(char *buf, size_t len, int32_t published) {
 }
 
 // ---------------------------------------------------------------------------
-// Accent surfaces
+// Static chrome: top bar + sidebar
 // ---------------------------------------------------------------------------
 
-//! The permanent 4 px accent spine along the right edge (full window height).
-static void spine_update(Layer *layer, GContext *ctx) {
-  graphics_context_set_fill_color(ctx, s_accent);
-  graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
-}
-
-//! The accent top bar: solid accent fill (the stream name is a TextLayer).
+//! Black top bar; the stream name is a TextLayer in accent.
 static void top_bar_update(Layer *layer, GContext *ctx) {
-  graphics_context_set_fill_color(ctx, s_accent);
+  graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 }
 
-//! The pin: a small notch at the current article's progress, base to the
-//! left, apex on the spine. Its color carries the read state: accent =
-//! unread, dark gray = read.
-static void pin_update(Layer *layer, GContext *ctx) {
+//! Thick accent sidebar holding the icons: a white dot (filled = unread,
+//! outline = read) and, when starred, the yellow star above it.
+static void sidebar_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
-  if (!s_pin_gpath) {
-    return;
-  }
-  const Article *a = current_article();
-  graphics_context_set_fill_color(ctx, (a && a->read) ? GColorDarkGray : s_accent);
-  gpath_move_to(s_pin_gpath, GPoint(0, b.size.h / 2));
-  gpath_draw_filled(ctx, s_pin_gpath);
-}
-
-//! Accent header bar: heading (bold, up to 2 lines, ellipsized) and the
-//! feed·time line. The bar color carries the read state: accent + black
-//! text for UNREAD, dark gray + white text for READ; a yellow star with a
-//! black outline on the right when the article is starred.
-static void header_update(Layer *layer, GContext *ctx) {
-  GRect b = layer_get_bounds(layer);
+  graphics_context_set_fill_color(ctx, s_accent);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
 
   const Article *a = current_article();
   if (!a) {
-    graphics_context_set_fill_color(ctx, s_accent);
-    graphics_fill_rect(ctx, b, 0, GCornerNone);
     return;
   }
-
-  GColor bar = a->read ? GColorDarkGray : s_accent;
-  GColor bar_text = a->read ? GColorWhite : GColorBlack;
-  graphics_context_set_fill_color(ctx, bar);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-
-  graphics_context_set_text_color(ctx, bar_text);
-  graphics_draw_text(ctx, a->title, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-                     GRect(4, 2, b.size.w - 8 - STAR_PAD, HEADING_MAX_H),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-
-  char meta[48];
-  char t[16];
-  format_reltime(t, sizeof(t), a->published);
-  snprintf(meta, sizeof(meta), "%s · %s", a->feed, t);
-  graphics_context_set_text_color(ctx, bar_text);
-  graphics_draw_text(ctx, meta, fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                     GRect(4, b.size.h - 18, b.size.w - 8, 16),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  int16_t cx = b.size.w / 2;
+  int16_t cy = b.size.h / 2;
 
   if (a->star && s_star_path) {
-    // Yellow star with a black outline so it reads on any bar color.
-    gpath_move_to(s_star_path, GPoint(b.size.w - 18, b.size.h / 2));
+    gpath_move_to(s_star_path, GPoint(cx, cy - 18));
     graphics_context_set_stroke_color(ctx, GColorBlack);
     graphics_context_set_stroke_width(ctx, 2);
     gpath_draw_outline(ctx, s_star_path);
     graphics_context_set_fill_color(ctx, GColorYellow);
     gpath_draw_filled(ctx, s_star_path);
   }
+
+  // Read/unread dot: filled = unread, outline = read.
+  graphics_context_set_stroke_color(ctx, GColorWhite);
+  graphics_context_set_stroke_width(ctx, 2);
+  if (a->read) {
+    graphics_draw_circle(ctx, GPoint(cx, cy + (a->star ? 16 : 0)), 5);
+  } else {
+    graphics_context_set_fill_color(ctx, GColorWhite);
+    graphics_fill_circle(ctx, GPoint(cx, cy + (a->star ? 16 : 0)), 5);
+  }
 }
 
-//! Dynamic header height for an article: the heading (capped at two
-//! GOTHIC_18 lines) plus room for the feed·time line, floored at 52 px.
+// ---------------------------------------------------------------------------
+// Page surfaces
+// ---------------------------------------------------------------------------
+
+//! Which ring index a header layer belongs to (there are only two pages).
+static int32_t header_article_idx(Layer *header) {
+  for (int i = 0; i < 2; i++) {
+    if (s_pages[i].header == header) {
+      return s_pages[i].idx;
+    }
+  }
+  return -1;
+}
+
+//! Accent header bar: always accent background with black text — the read
+//! state lives in the sidebar icons, not the colors.
+static void header_update(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+
+  graphics_context_set_fill_color(ctx, s_accent);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+
+  int32_t idx = header_article_idx(layer);
+  const Article *a = (idx >= 0 && idx < s_count) ? &s_articles[idx] : NULL;
+  if (!a) {
+    return;
+  }
+
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, a->title, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                     GRect(4, 2, b.size.w - SIDEBAR_W - 8, HEADING_MAX_H),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+
+  char meta[48];
+  char t[16];
+  format_reltime(t, sizeof(t), a->published);
+  snprintf(meta, sizeof(meta), "%s · %s", a->feed, t);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, meta, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                     GRect(4, b.size.h - 18, b.size.w - SIDEBAR_W - 8, 16),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+//! Dynamic header height: heading (capped at two GOTHIC_18 lines) plus room
+//! for the feed·time line, floored at 52 px.
 static int16_t header_height_for(const Article *a) {
   GSize sz = graphics_text_layout_get_content_size(
       a->title, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-      GRect(4, 0, s_win_w - 8 - STAR_PAD, 1000),
+      GRect(4, 0, s_win_w - SIDEBAR_W - 8, 1000),
       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
   int32_t h = sz.h;
   if (h > HEADING_MAX_H) {
@@ -231,126 +232,68 @@ static int16_t header_height_for(const Article *a) {
   return (int16_t)(h < HEADER_FLOOR ? HEADER_FLOOR : h);
 }
 
-// ---------------------------------------------------------------------------
-// Pin glide
-// ---------------------------------------------------------------------------
+//! Build one article page (header + scrollable summary) into a fresh set of
+//! layers; the body text stays clear of the sidebar.
+static void page_build(Page *p, int32_t idx) {
+  const Article *a = &s_articles[idx];
+  p->idx = idx;
 
-static void pin_anim_update(Animation *anim, const AnimationProgress progress) {
-  s_pin_cur = s_pin_from +
-              (int16_t)(((int32_t)(s_pin_to - s_pin_from) * (int32_t)progress) /
-                        (int32_t)ANIMATION_NORMALIZED_MAX);
-  if (s_pin) {
-    layer_set_frame(s_pin, GRect(s_win_w - PIN_W - 3, s_pin_cur, PIN_W, PIN_H));
-    layer_mark_dirty(s_pin);
-  }
-}
+  p->root = layer_create(GRect(0, TOP_BAR_H, s_win_w, s_view_h));
+  layer_add_child(s_root, p->root);
 
-static void pin_anim_stopped(Animation *anim, bool finished, void *context) {
-  if (anim != s_pin_anim) {
-    return; // superseded by a newer glide
-  }
-  s_pin_anim = NULL;
-  s_pin_cur = s_pin_to;
-  if (s_pin) {
-    layer_set_frame(s_pin, GRect(s_win_w - PIN_W - 3, s_pin_cur, PIN_W, PIN_H));
-    layer_mark_dirty(s_pin);
-  }
-}
+  int16_t hh = header_height_for(a);
+  p->header = layer_create(GRect(0, 0, s_win_w, hh));
+  layer_set_update_proc(p->header, header_update);
+  layer_add_child(p->root, p->header);
 
-static const AnimationImplementation PIN_ANIM_IMPL = {
-  .update = pin_anim_update,
-};
+  p->scroll = scroll_layer_create(GRect(0, hh, s_win_w, s_view_h - hh));
+  scroll_layer_set_callbacks(p->scroll, (ScrollLayerCallbacks){
+    .content_offset_changed_handler = timeline_content_offset_changed,
+  });
+  scroll_layer_set_shadow_hidden(p->scroll, true);
+  layer_add_child(p->root, scroll_layer_get_layer(p->scroll));
 
-//! Reposition the pin for the current article's progress within the loaded
-//! window; glide (220 ms ease-in-out) or snap. Called when the article
-//! changes and when pages append.
-static void pin_reposition(bool glide) {
-  if (!s_pin || s_count == 0) {
-    return;
-  }
-  int32_t den = s_count > 0 ? s_count : 1;
-  int32_t body_h = s_view_h - s_header_h;
-  int32_t y = s_header_h + (body_h - 14) * (s_idx + 1) / den;
-  if (y < s_header_h) {
-    y = s_header_h;
-  }
-  if (y > s_view_h - PIN_H) {
-    y = s_view_h - PIN_H;
-  }
-
-  if (s_pin_anim) {
-    Animation *old = s_pin_anim;
-    s_pin_anim = NULL;
-    animation_unschedule(old);
-  }
-  if (!glide) {
-    s_pin_cur = (int16_t)y;
-    layer_set_frame(s_pin, GRect(s_win_w - PIN_W - 3, s_pin_cur, PIN_W, PIN_H));
-    layer_mark_dirty(s_pin);
-    return;
-  }
-  s_pin_from = s_pin_cur;
-  s_pin_to = (int16_t)y;
-  if (s_pin_to == s_pin_from) {
-    return;
-  }
-  s_pin_anim = animation_create();
-  animation_set_duration(s_pin_anim, 220);
-  animation_set_curve(s_pin_anim, AnimationCurveEaseInOut);
-  animation_set_implementation(s_pin_anim, &PIN_ANIM_IMPL);
-  animation_set_handlers(s_pin_anim, (AnimationHandlers){
-    .stopped = pin_anim_stopped,
-  }, NULL);
-  animation_schedule(s_pin_anim);
-}
-
-// ---------------------------------------------------------------------------
-// Article page
-// ---------------------------------------------------------------------------
-
-//! Rebuild header + body for the current article: dynamic header height, a
-//! fresh wrapped summary TextLayer (destroy/create resets the scroll state)
-//! and the measured content height on the scroll layer.
-static void load_article_content(void) {
-  const Article *a = current_article();
-  if (!a) {
-    return;
-  }
-
-  s_header_h = header_height_for(a);
-  layer_set_frame(s_header_bar, GRect(0, 0, s_win_w, s_header_h));
-  layer_mark_dirty(s_header_bar);
-
-  scroll_layer_set_frame(s_scroll, GRect(0, s_header_h, s_win_w, s_view_h - s_header_h));
-
-  if (s_body) {
-    text_layer_destroy(s_body);
-    s_body = NULL;
-  }
-
-  // Measured wrapped height of the summary in the same box the layer uses
-  // (window width minus 12 px so the spine stays clear).
   GSize sz = graphics_text_layout_get_content_size(
       a->summary, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(4, 2, s_win_w - 12, 1000), GTextOverflowModeWordWrap, GTextAlignmentLeft);
+      GRect(4, 2, s_win_w - SIDEBAR_W - 8, 1000),
+      GTextOverflowModeWordWrap, GTextAlignmentLeft);
   int32_t body_h = sz.h + 6; // 2 px top pad + 4 px air at the bottom
 
-  s_body = text_layer_create(GRect(4, 2, s_win_w - 12, sz.h));
-  text_layer_set_font(s_body, fonts_get_system_font(FONT_KEY_GOTHIC_18));
-  text_layer_set_text_alignment(s_body, GTextAlignmentLeft);
-  text_layer_set_overflow_mode(s_body, GTextOverflowModeWordWrap);
-  text_layer_set_background_color(s_body, theme_bg());
-  text_layer_set_text_color(s_body, theme_fg());
-  text_layer_set_text(s_body, a->summary);
-  layer_add_child(scroll_layer_get_layer(s_scroll), text_layer_get_layer(s_body));
+  p->body = text_layer_create(GRect(4, 2, s_win_w - SIDEBAR_W - 8, sz.h));
+  text_layer_set_font(p->body, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_text_alignment(p->body, GTextAlignmentLeft);
+  text_layer_set_overflow_mode(p->body, GTextOverflowModeWordWrap);
+  text_layer_set_background_color(p->body, theme_bg());
+  text_layer_set_text_color(p->body, theme_fg());
+  text_layer_set_text(p->body, a->summary);
+  layer_add_child(scroll_layer_get_layer(p->scroll), text_layer_get_layer(p->body));
 
-  scroll_layer_set_content_size(s_scroll, GSize(s_win_w, body_h));
-  scroll_layer_set_content_offset(s_scroll, GPointZero, false);
-  s_last_offset = GPointZero;
+  scroll_layer_set_content_size(p->scroll, GSize(s_win_w - SIDEBAR_W, body_h));
+  scroll_layer_set_content_offset(p->scroll, GPointZero, false);
+}
+
+static void page_destroy(Page *p) {
+  if (p->body) {
+    text_layer_destroy(p->body);
+    p->body = NULL;
+  }
+  if (p->scroll) {
+    scroll_layer_destroy(p->scroll);
+    p->scroll = NULL;
+  }
+  if (p->header) {
+    layer_destroy(p->header);
+    p->header = NULL;
+  }
+  if (p->root) {
+    layer_destroy(p->root);
+    p->root = NULL;
+  }
+  p->idx = -1;
 }
 
 // ---------------------------------------------------------------------------
-// Advance transition
+// Page transition (continuous two-page slide)
 // ---------------------------------------------------------------------------
 
 //! Scroll tracking: when a scroll (button paging or touch fling) lands the
@@ -371,8 +314,77 @@ static void timeline_content_offset_changed(ScrollLayer *scroll, void *context) 
   }
 }
 
-//! Commit an advance: guard the article, then slide the page up and bring
-//! the next article in from below. The last loaded article pulses and stays.
+//! Transition finished: the target page is fully on screen. Commit the new
+//! index, mark read on advances, drop the old page and release the locks.
+static void transition_finalize(void) {
+  s_idx = s_target_idx;
+  if (s_dir > 0 && s_mark_detail) {
+    article_mark_read(s_idx);
+  }
+  page_destroy(&s_pages[s_cur]);
+  s_cur = 1 - s_cur;
+  s_advancing = false;
+  s_advance_guard = false;
+  s_last_offset = GPointZero;
+  if (s_sidebar) {
+    layer_mark_dirty(s_sidebar);
+  }
+  timeline_prefetch_check();
+}
+
+//! The current page's out-animation stopped: finalize the swap.
+static void transition_anim_stopped(Animation *anim, bool finished, void *context) {
+  if (anim != s_anim_a) {
+    return;
+  }
+  s_anim_a = NULL;
+  s_anim_b = NULL;
+  transition_finalize();
+}
+
+//! Start a transition in the given direction (+1 next, -1 previous): build
+//! the target page, park it off-screen on the entry side, then slide the
+//! current page out while the target slides in — both 260 ms ease-in-out,
+//! one continuous sheet, no cut.
+static void transition_to(int8_t dir) {
+  if (s_advancing) {
+    return;
+  }
+  int32_t nidx = s_idx + dir;
+  if (nidx < 0 || nidx >= s_count) {
+    vibes_short_pulse(); // first/last article: stay
+    return;
+  }
+  s_advancing = true;
+  s_advance_guard = (dir > 0);
+  s_dir = dir;
+  s_target_idx = nidx;
+
+  Page *sp = spare_page();
+  page_build(sp, nidx);
+  layer_set_frame(sp->root, GRect(0, TOP_BAR_H + dir * s_view_h, s_win_w, s_view_h));
+
+  Page *cp = cur_page();
+
+  s_from_a = layer_get_frame(cp->root);
+  s_to_a = GRect(0, TOP_BAR_H - dir * s_view_h, s_win_w, s_view_h);
+  s_anim_a = (Animation *)property_animation_create_layer_frame(cp->root, &s_to_a, &s_from_a);
+  animation_set_duration(s_anim_a, 260);
+  animation_set_curve(s_anim_a, AnimationCurveEaseInOut);
+  animation_set_handlers(s_anim_a, (AnimationHandlers){
+    .stopped = transition_anim_stopped,
+  }, NULL);
+  animation_schedule(s_anim_a);
+
+  s_from_b = layer_get_frame(sp->root);
+  s_to_b = GRect(0, TOP_BAR_H, s_win_w, s_view_h);
+  s_anim_b = (Animation *)property_animation_create_layer_frame(sp->root, &s_to_b, &s_from_b);
+  animation_set_duration(s_anim_b, 260);
+  animation_set_curve(s_anim_b, AnimationCurveEaseInOut);
+  animation_schedule(s_anim_b);
+}
+
+//! Advance to the next article (guarded).
 static void maybe_advance(void) {
   if (s_advancing || s_advance_guard) {
     return;
@@ -380,17 +392,10 @@ static void maybe_advance(void) {
   if (s_count == 0) {
     return;
   }
-  if (s_idx + 1 >= s_count) {
-    vibes_short_pulse(); // last article: stay
-    return;
-  }
-  s_advance_guard = true;
-  s_advancing = true;
-  slide_start(1);
+  transition_to(1);
 }
 
-//! Go back to the previously read article (scroll up past the top); the
-//! newest article has nothing above it.
+//! Go back to the previously read article.
 static void maybe_regress(void) {
   if (s_advancing || s_advance_guard) {
     return;
@@ -398,78 +403,7 @@ static void maybe_regress(void) {
   if (s_count == 0) {
     return;
   }
-  if (s_idx <= 0) {
-    vibes_short_pulse(); // already at the newest: nothing above
-    return;
-  }
-  s_advancing = true;
-  slide_start(-1);
-}
-
-//! Phase 2 done: the new article is fully on screen; release the transition
-//! lock and the per-article advance guard.
-static void slide_phase2_stopped(Animation *anim, bool finished, void *context) {
-  if (anim != s_slide_anim) {
-    return;
-  }
-  s_slide_anim = NULL;
-  s_advancing = false;
-  s_advance_guard = false;
-  layer_set_frame(s_container, GRect(0, TOP_BAR_H, s_win_w, s_view_h));
-}
-
-//! Phase 1 done: the old article has slid out. Load the next/previous
-//! article's data into the header/body, park the container off-screen on
-//! the opposite side and slide it in (phase 2).
-static void slide_phase1_stopped(Animation *anim, bool finished, void *context) {
-  if (anim != s_slide_anim) {
-    return;
-  }
-  s_slide_anim = NULL;
-
-  s_idx += s_slide_dir;
-  load_article_content();
-  if (s_slide_dir > 0) {
-    // Advancing into an article marks it read per the detail toggle;
-    // going back never marks anything.
-    if (s_mark_detail) {
-      article_mark_read(s_idx);
-    }
-  }
-  pin_reposition(true); // glide to the new progress
-  timeline_prefetch_check();
-
-  layer_set_frame(s_container, GRect(0, TOP_BAR_H + s_slide_dir * s_view_h, s_win_w, s_view_h));
-
-  s_slide_from = layer_get_frame(s_container);
-  s_slide_to = GRect(0, TOP_BAR_H, s_win_w, s_view_h);
-  s_slide_anim = (Animation *)property_animation_create_layer_frame(s_container, &s_slide_to, &s_slide_from);
-  animation_set_duration(s_slide_anim, 260);
-  animation_set_curve(s_slide_anim, AnimationCurveEaseOut);
-  animation_set_handlers(s_slide_anim, (AnimationHandlers){
-    .stopped = slide_phase2_stopped,
-  }, NULL);
-  animation_schedule(s_slide_anim);
-}
-
-//! Phase 1 of a transition: slide the current page out (ease-in, 220 ms)
-//! in the given direction (+1 up/next, -1 down/previous).
-static void slide_start(int8_t dir) {
-  if (s_slide_anim) {
-    Animation *old = s_slide_anim;
-    s_slide_anim = NULL;
-    animation_unschedule(old);
-  }
-  s_slide_dir = dir;
-  s_slide_from = layer_get_frame(s_container);
-  s_slide_to = GRect(0, TOP_BAR_H - dir * s_view_h, s_win_w, s_view_h);
-  s_slide_anim = (Animation *)property_animation_create_layer_frame(s_container, &s_slide_to, &s_slide_from);
-  animation_set_duration(s_slide_anim, 260);
-  animation_set_curve(s_slide_anim, AnimationCurveEaseIn);
-  animation_set_handlers(s_slide_anim, (AnimationHandlers){
-    .stopped = slide_phase1_stopped,
-  }, NULL);
-  animation_schedule(s_slide_anim);
+  transition_to(-1);
 }
 
 // ---------------------------------------------------------------------------
@@ -482,8 +416,9 @@ static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing) {
     return;
   }
-  if (scroll_layer_get_content_offset(s_scroll).y > 0) {
-    scroll_layer_scroll_up_click_handler(rec, s_scroll);
+  ScrollLayer *scroll = cur_page()->scroll;
+  if (scroll_layer_get_content_offset(scroll).y > 0) {
+    scroll_layer_scroll_up_click_handler(rec, scroll);
   } else {
     maybe_regress();
   }
@@ -495,18 +430,18 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing || s_advance_guard) {
     return;
   }
-  GRect frame = layer_get_frame(scroll_layer_get_layer(s_scroll));
-  GSize content = scroll_layer_get_content_size(s_scroll);
-  GPoint offset = scroll_layer_get_content_offset(s_scroll);
+  ScrollLayer *scroll = cur_page()->scroll;
+  GRect frame = layer_get_frame(scroll_layer_get_layer(scroll));
+  GSize content = scroll_layer_get_content_size(scroll);
+  GPoint offset = scroll_layer_get_content_offset(scroll);
   if (content.h <= frame.size.h + 2 || offset.y >= content.h - frame.size.h - 2) {
     maybe_advance();
   } else {
-    scroll_layer_scroll_down_click_handler(rec, s_scroll);
+    scroll_layer_scroll_down_click_handler(rec, scroll);
   }
 }
 
-//! SELECT advances to the next article (marks per the detail toggle when the
-//! new article becomes current).
+//! SELECT advances to the next article.
 static void timeline_select_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing) {
     return;
@@ -514,7 +449,8 @@ static void timeline_select_click(ClickRecognizerRef rec, void *ctx) {
   maybe_advance();
 }
 
-//! Long SELECT toggles the star of the current article (fire-and-forget).
+//! Long SELECT toggles the star of the current article (fire-and-forget);
+//! the star icon lives in the sidebar.
 static void timeline_star_long_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing) {
     return;
@@ -523,8 +459,8 @@ static void timeline_star_long_click(ClickRecognizerRef rec, void *ctx) {
   a->star = !a->star;
   proto_star(a->id, a->star);
   vibes_short_pulse();
-  if (s_header_bar) {
-    layer_mark_dirty(s_header_bar);
+  if (s_sidebar) {
+    layer_mark_dirty(s_sidebar);
   }
 }
 
@@ -567,53 +503,29 @@ static void timeline_window_load(Window *window) {
   s_win_w = bounds.size.w;
   s_win_h = bounds.size.h;
   s_view_h = s_win_h - TOP_BAR_H;
+  s_root = root;
 
   window_set_background_color(window, theme_bg());
 
   s_star_path = gpath_create(&STAR_PATH_INFO);
-  s_pin_gpath = gpath_create(&PIN_PATH_INFO);
-  s_header_h = HEADER_FLOOR;
-  s_pin_cur = HEADER_FLOOR;
   s_last_offset = GPointZero;
+  s_cur = 0;
+  s_pages[0].idx = -1;
+  s_pages[1].idx = -1;
 
-  // Accent top bar: the folder/feed currently showing its articles. Stays
-  // put while the page below slides.
+  // Black top bar with the stream name in accent.
   s_top_bar = layer_create(GRect(0, 0, s_win_w, TOP_BAR_H));
   layer_set_update_proc(s_top_bar, top_bar_update);
   layer_add_child(root, s_top_bar);
 
-  s_top_text = text_layer_create(GRect(4, 1, s_win_w - 8, TOP_BAR_H - 2));
+  s_top_text = text_layer_create(GRect(4, 1, s_win_w - SIDEBAR_W - 8, TOP_BAR_H - 2));
   text_layer_set_font(s_top_text, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_top_text, GTextAlignmentLeft);
   text_layer_set_overflow_mode(s_top_text, GTextOverflowModeTrailingEllipsis);
   text_layer_set_background_color(s_top_text, GColorClear);
-  text_layer_set_text_color(s_top_text, GColorBlack);
+  text_layer_set_text_color(s_top_text, s_accent);
   text_layer_set_text(s_top_text, s_title);
   layer_add_child(root, text_layer_get_layer(s_top_text));
-
-  // The sliding container holds every page surface; children are positioned
-  // relative to it so the whole page moves together during a transition.
-  s_container = layer_create(GRect(0, TOP_BAR_H, s_win_w, s_view_h));
-  layer_add_child(root, s_container);
-
-  s_header_bar = layer_create(GRect(0, 0, s_win_w, s_header_h));
-  layer_set_update_proc(s_header_bar, header_update);
-  layer_add_child(s_container, s_header_bar);
-
-  s_scroll = scroll_layer_create(GRect(0, s_header_h, s_win_w, s_view_h - s_header_h));
-  scroll_layer_set_callbacks(s_scroll, (ScrollLayerCallbacks){
-    .content_offset_changed_handler = timeline_content_offset_changed,
-  });
-  scroll_layer_set_shadow_hidden(s_scroll, true);
-  layer_add_child(s_container, scroll_layer_get_layer(s_scroll));
-
-  s_spine = layer_create(GRect(s_win_w - SPINE_W - 2, 0, SPINE_W, s_view_h));
-  layer_set_update_proc(s_spine, spine_update);
-  layer_add_child(s_container, s_spine);
-
-  s_pin = layer_create(GRect(s_win_w - PIN_W - 3, s_pin_cur, PIN_W, PIN_H));
-  layer_set_update_proc(s_pin, pin_update);
-  layer_add_child(s_container, s_pin);
 
   s_status = text_layer_create(bounds);
   text_layer_set_font(s_status, fonts_get_system_font(FONT_KEY_GOTHIC_18));
@@ -624,10 +536,13 @@ static void timeline_window_load(Window *window) {
   text_layer_set_text(s_status, s_loading ? "Loading..." : "No articles");
   layer_add_child(root, text_layer_get_layer(s_status));
 
+  // The accent sidebar overlays the pages (added last).
+  s_sidebar = layer_create(GRect(s_win_w - SIDEBAR_W, TOP_BAR_H, SIDEBAR_W, s_view_h));
+  layer_set_update_proc(s_sidebar, sidebar_update);
+  layer_add_child(root, s_sidebar);
+
   window_set_click_config_provider(window, timeline_click_config_provider);
 
-  // No articles yet: hide the reader and show the full-screen status.
-  layer_set_hidden(s_container, true);
   status_update();
 }
 
@@ -636,23 +551,22 @@ static void timeline_window_load(Window *window) {
 //! and release the layer pointers.
 static void timeline_close(void) {
   proto_flush_now();
-  if (s_slide_anim) {
-    Animation *old = s_slide_anim;
-    s_slide_anim = NULL;
+  if (s_anim_a) {
+    Animation *old = s_anim_a;
+    s_anim_a = NULL;
     animation_unschedule(old);
   }
-  if (s_pin_anim) {
-    Animation *old = s_pin_anim;
-    s_pin_anim = NULL;
+  if (s_anim_b) {
+    Animation *old = s_anim_b;
+    s_anim_b = NULL;
     animation_unschedule(old);
   }
-  s_container = NULL;
+  page_destroy(&s_pages[0]);
+  page_destroy(&s_pages[1]);
+  s_root = NULL;
   s_top_bar = NULL;
   s_top_text = NULL;
-  s_header_bar = NULL;
-  s_scroll = NULL;
-  s_spine = NULL;
-  s_pin = NULL;
+  s_sidebar = NULL;
 }
 
 static void timeline_window_unload(Window *window) {
@@ -661,25 +575,9 @@ static void timeline_window_unload(Window *window) {
     gpath_destroy(s_star_path);
     s_star_path = NULL;
   }
-  if (s_pin_gpath) {
-    gpath_destroy(s_pin_gpath);
-    s_pin_gpath = NULL;
-  }
-  if (s_body) {
-    text_layer_destroy(s_body);
-    s_body = NULL;
-  }
-  if (s_scroll) {
-    scroll_layer_destroy(s_scroll);
-    s_scroll = NULL;
-  }
   if (s_status) {
     text_layer_destroy(s_status);
     s_status = NULL;
-  }
-  if (s_header_bar) {
-    layer_destroy(s_header_bar);
-    s_header_bar = NULL;
   }
   if (s_top_text) {
     text_layer_destroy(s_top_text);
@@ -689,17 +587,9 @@ static void timeline_window_unload(Window *window) {
     layer_destroy(s_top_bar);
     s_top_bar = NULL;
   }
-  if (s_spine) {
-    layer_destroy(s_spine);
-    s_spine = NULL;
-  }
-  if (s_pin) {
-    layer_destroy(s_pin);
-    s_pin = NULL;
-  }
-  if (s_container) {
-    layer_destroy(s_container);
-    s_container = NULL;
+  if (s_sidebar) {
+    layer_destroy(s_sidebar);
+    s_sidebar = NULL;
   }
   window_destroy(s_tl_window);
   s_tl_window = NULL;
@@ -800,13 +690,15 @@ void timeline_collect_article(DictionaryIterator *iter) {
     a->star = t->value->int32 ? 1 : 0;
   }
 
-  if (first && s_tl_window && s_container) {
-    // First article of the stream: bring the reader up (article 0 becomes
-    // current) and mark it per the list toggle.
-    layer_set_hidden(s_container, false);
+  if (first && s_tl_window) {
+    // First article of the stream: build page 0, hide the status and mark
+    // it per the list toggle.
+    s_cur = 0;
+    page_build(&s_pages[0], 0);
     status_update();
-    load_article_content();
-    pin_reposition(false);
+    if (s_sidebar) {
+      layer_mark_dirty(s_sidebar);
+    }
     if (s_mark_list) {
       article_mark_read(0);
     }
@@ -815,7 +707,7 @@ void timeline_collect_article(DictionaryIterator *iter) {
 }
 
 //! The page ended: store the continuation ("", = no more items), release the
-//! loading flag, show "No articles" on an empty stream and re-span the pin.
+//! loading flag and show "No articles" on an empty stream.
 void timeline_page_end(const char *cont) {
   snprintf(s_cont, sizeof(s_cont), "%s", cont ? cont : "");
   s_loaded_all = (s_cont[0] == '\0');
@@ -826,7 +718,6 @@ void timeline_page_end(const char *cont) {
   }
   status_update();
   if (s_count > 0) {
-    pin_reposition(true); // pages appended: glide the pin to the new span
     timeline_prefetch_check();
   }
 }
@@ -859,14 +750,16 @@ static void article_mark_read(int32_t idx) {
   a->read = 1;
   proto_mark_push(a->id);
   tree_feed_decrement(a->feed_id);
+  if (s_sidebar) {
+    layer_mark_dirty(s_sidebar); // the read/unread dot flips
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
-//! Re-apply accent/theme to the timeline window (from settings). The header,
-//! spine and pin stay accent; the body, scroll and status re-theme.
+//! Re-apply accent/theme to the timeline window (from settings).
 void timeline_apply_settings(void) {
   if (!s_tl_window) {
     return;
@@ -875,20 +768,20 @@ void timeline_apply_settings(void) {
   if (s_status) {
     text_layer_set_text_color(s_status, theme_muted());
   }
-  if (s_body) {
-    text_layer_set_background_color(s_body, theme_bg());
-    text_layer_set_text_color(s_body, theme_fg());
+  if (s_top_text) {
+    text_layer_set_text_color(s_top_text, s_accent);
   }
-  if (s_header_bar) {
-    layer_mark_dirty(s_header_bar);
+  for (int i = 0; i < 2; i++) {
+    Page *p = &s_pages[i];
+    if (p->body) {
+      text_layer_set_background_color(p->body, theme_bg());
+      text_layer_set_text_color(p->body, theme_fg());
+    }
+    if (p->header) {
+      layer_mark_dirty(p->header);
+    }
   }
-  if (s_top_bar) {
-    layer_mark_dirty(s_top_bar);
-  }
-  if (s_spine) {
-    layer_mark_dirty(s_spine);
-  }
-  if (s_pin) {
-    layer_mark_dirty(s_pin);
+  if (s_sidebar) {
+    layer_mark_dirty(s_sidebar);
   }
 }

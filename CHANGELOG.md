@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.6
+
+- Reader redesign per spec: black top bar with the stream name in accent;
+  heading bar is ALWAYS accent with black text (no more grey read headers);
+  summary on the theme background; thick (26 px) accent sidebar holding the
+  icons — read/unread dot (white filled = unread, white outline = read) and
+  the yellow star
+- Page transition rebuilt as a continuous two-page slide: the outgoing page
+  leaves while the incoming page enters (both 260 ms ease-in-out, one sheet,
+  no teleport cut)
+- Sidebar is static (no more sliding pin — it behaved weird during
+  transitions); icons update per article
+
 ## 0.1.5
 
 - Modern look: dark theme by default; accent color made prominent — root
