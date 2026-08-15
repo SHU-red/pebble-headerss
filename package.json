@@ -1,0 +1,79 @@
+{
+  "name": "pebble-headerss",
+  "author": "SHU-red",
+  "version": "0.1.0",
+  "keywords": [
+    "pebble-app",
+    "freshrss",
+    "rss"
+  ],
+  "private": true,
+  "dependencies": {
+    "@rebble/clay": "^1.0.8"
+  },
+  "pebble": {
+    "displayName": "HeadeRSS",
+    "shortName": "HeadeRSS",
+    "uuid": "c253d707-74ef-4656-9f85-e607c870743c",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "capabilities": [
+      "configurable"
+    ],
+    "targetPlatforms": [
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery",
+      "gabbro"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": [
+      "FetchTree",
+      "FetchItems",
+      "ItemStream",
+      "ItemCont",
+      "FetchN",
+      "MarkRead",
+      "StarItem",
+      "StarOn",
+      "MarkAllRead",
+      "FetchSummary",
+      "ItemId",
+      "RequestConfig",
+      "ResultCode",
+      "ResultText",
+      "FeedCount",
+      "FeedType",
+      "FeedId",
+      "FeedName",
+      "FeedUnread",
+      "FeedParent",
+      "ItemCount",
+      "ItemTitle",
+      "ItemFeed",
+      "ItemFeedId",
+      "ItemTime",
+      "ItemRead",
+      "ItemStar",
+      "ItemSummary",
+      "AccentColor",
+      "DarkMode",
+      "TouchEnabled",
+      "MarkOnOpenList",
+      "MarkOnOpenDetail"
+    ],
+    "resources": {
+      "media": [
+        {
+          "menuIcon": true,
+          "type": "bitmap",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/logo_25.png"
+        }
+      ]
+    }
+  }
+}

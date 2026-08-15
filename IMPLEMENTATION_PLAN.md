@@ -194,9 +194,9 @@ Implementation (reuse-first, then custom):
 
 Clay page: FreshRSS URL, username, API password; behaviour: **Mark read on open
 (timeline)** + **Mark read on open (detail)** toggles (both default ON);
-appearance: dark/light, accent color, touch toggle, auto-close. Watch-bound
-sub-menu additionally: Refresh tree, Mark all read, stream-jump (All unread /
-Starred). Mirrors launcher config split; `RequestConfig` re-sync on launch.
+appearance: dark/light, accent color, touch toggle. Watch-bound
+sub-menu: Refresh, Mark all read, Connection hint ("set server in phone app
+settings"). Mirrors launcher config split; `RequestConfig` re-sync on launch.
 
 ---
 
