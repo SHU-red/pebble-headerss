@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.7 — scrollable article unit, orange star, marker highlight
+
+- **The whole heading + summary scroll as one unit**: the accent heading
+  (full title, never clamped) and the summary body are now inside a single
+  scroll layer — DOWN scrolls the article from the first line of the title
+  to the last word of the text, and only a further DOWN at the very end
+  advances. A thin accent divider line separates the top bar from the
+  scrollable page. The scroll limit is the real end of the text, so the
+  last word is always reachable.
+- **Stuck-while-loading eliminated**: a full-summary fetch that never
+  completes (e.g. a dropped chunk chain) timed out after 3 s and released
+  the DOWN block — the preview stays and navigation resumes. (The stuck
+  reports came from DOWN being blocked forever on the short preview.)
+- **Favourite indicator is a star again, in orange** (was a white heart).
+- **Highlight = text marker**: matched words are drawn bold with an alarm-red
+  background fill (like a highlighter) instead of red text + underline; the
+  sidebar magnifier lights up in the same alarm red as the marking.
+
 ## 0.3.6
 
 - **Connection info (and every result dialog) fixed**: a pulse-tick callback
