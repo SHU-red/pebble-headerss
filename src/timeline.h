@@ -21,4 +21,9 @@ void timeline_page_end(const char *cont);
 //! Re-apply accent/theme to the timeline window (from settings).
 void timeline_apply_settings(void);
 
+//! A new highlight-word list arrived (Clay -> watch): re-layout the open
+//! reader's current article (body + header) in place and mark it dirty, so
+//! the words highlight live while reading. No-op when no reader is open.
+void timeline_highlight_words_changed(void);
+
 #endif

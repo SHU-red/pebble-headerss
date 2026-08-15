@@ -36,6 +36,7 @@ static AppTimer *s_timeout_timer;
 static AppTimer *s_dismiss_timer;
 static AppTimer *s_pulse_timer;
 static bool s_dialog_active;
+static bool s_dialog_dismissing; // async pop in flight (unload not yet run)
 static bool s_dialog_confirm;
 static bool s_confirm_markall; // the confirm dialog is about Mark all read
 static char s_markall_stream[48]; // stream the confirm targets ("" = reading list)
@@ -118,9 +119,11 @@ static void dialog_click_config_provider(void *ctx) {
 
 static void dialog_dismiss_cb(void *data) {
   s_dismiss_timer = NULL;
-  // Pop only the dialog: the app stays alive (exiting mid-AppMessage-stream
-  // crashed on use-after-free of windows/animation objects).
-  if (s_dialog_window) {
+  if (s_dialog_window && !s_dialog_dismissing) {
+    s_dialog_dismissing = true;
+    // Pop only the dialog: the app stays alive (exiting mid-AppMessage-stream
+    // crashed on use-after-free of windows/animation objects). The unload is
+    // asynchronous, so block a second dismiss from racing the pop.
     window_stack_remove(s_dialog_window, true);
   }
 }
@@ -134,12 +137,22 @@ static void request_timeout_cb(void *data) {
 }
 
 //! Animated ellipsis on the working dialog: "<label>", "<label>.", ...
+//! Reschedules itself while the dialog is alive. MUST re-check the dialog
+//! state: the dismiss/unload path is asynchronous (window_stack_remove ->
+//! unload), so this callback can be queued behind the cancel that popped
+//! the dialog — touching the freed text layer then faults the app.
 static void pulse_tick_cb(void *data) {
+  if (!s_dialog_active || !s_dialog_text) {
+    return;
+  }
   static const char *dots[] = { "", ".", "..", "..." };
   s_pulse_phase = (uint8_t)((s_pulse_phase + 1) % 4);
   char buf[40];
   snprintf(buf, sizeof(buf), "%s%s", s_working_label, dots[s_pulse_phase]);
   text_layer_set_text(s_dialog_text, buf);
+  if (s_dialog_active) {
+    s_pulse_timer = app_timer_register(PULSE_INTERVAL_MS, pulse_tick_cb, NULL);
+  }
 }
 
 static void dialog_cancel_timers(void) {
@@ -185,6 +198,7 @@ static void dialog_create(void) {
   layer_add_child(s_dialog_bg, text_layer_get_layer(s_dialog_text));
 
   s_dialog_active = true;
+  s_dialog_dismissing = false;
   window_stack_push(s_dialog_window, false);
 }
 
@@ -241,6 +255,7 @@ static void dialog_unload(Window *window) {
   window_destroy(s_dialog_window);
   s_dialog_window = NULL;
   s_dialog_active = false;
+  s_dialog_dismissing = false;
 }
 
 // ---------------------------------------------------------------------------

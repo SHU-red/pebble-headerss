@@ -19,6 +19,8 @@
 //   10 TreeCount (int32)
 //   11 TriageDrain (int32, smart-surface toggle; default OFF)
 //   12 LastSeenCount (int32)
+//   13 HighlightWords (string CSV: comma-separated highlight words from Clay,
+//      max 10 entries of 32 bytes each, <= 340 B stored)
 //   20+i  Tree cache: FeedNode blob per node (<= 256 B each)
 //   100+i LastSeen: {char id[48]; int64_t seconds;} per feed (<= 256 B each)
 // ---------------------------------------------------------------------------
@@ -35,6 +37,7 @@
 #define PERSIST_KEY_TREE_COUNT 10 // int32: number of cached tree nodes
 #define PERSIST_KEY_TRIAGE 11    // int32: 1 = triage drain from Starred
 #define PERSIST_KEY_LASTSEEN_COUNT 12 // int32: number of last-seen entries
+#define PERSIST_KEY_HIGHLIGHT 13 // string CSV: highlight words (<= 340 B)
 #define PERSIST_KEY_TREE_BASE 20  // + i: FeedNode blobs (<= 256 B each)
 #define PERSIST_KEY_LASTSEEN_BASE 100 // + i: last-seen entries (<= 256 B each)
 
@@ -138,6 +141,93 @@ void storage_feed_set_last_seen(const char *feed_id, int64_t seconds) {
 }
 
 // ---------------------------------------------------------------------------
+// Highlight words (reader word highlighting). The Clay config delivers a
+// comma-separated list; the watch parses it into HL_WORDS_MAX entries of up
+// to HL_WORD_MAX bytes each (whitespace-trimmed, empty entries dropped) and
+// persists the normalized CSV at PERSIST_KEY_HIGHLIGHT. The reader polls the
+// parsed table via highlight_word_count()/highlight_word(); proto.c hands
+// new lists to storage_highlight_set_words().
+// ---------------------------------------------------------------------------
+
+static char s_hl_words[HL_WORDS_MAX][HL_WORD_MAX + 1];
+static int s_hl_count;
+// Normalized CSV: entries joined with "," (10*33 + 9 commas + NUL = 340).
+static char s_hl_csv[HL_WORDS_MAX * (HL_WORD_MAX + 1) + HL_WORDS_MAX + 1];
+
+//! Parse a comma-separated list into s_hl_words (trimmed, capped, empties
+//! dropped). Comma is the only separator; spaces around an entry are trimmed.
+static void hl_parse(const char *csv) {
+  s_hl_count = 0;
+  if (!csv) {
+    return;
+  }
+  const char *p = csv;
+  while (*p && s_hl_count < HL_WORDS_MAX) {
+    // Skip separators and leading whitespace between entries.
+    while (*p == ',' || *p == ' ' || *p == '\t') {
+      p++;
+    }
+    if (!*p) {
+      break;
+    }
+    const char *start = p;
+    while (*p && *p != ',') {
+      p++;
+    }
+    const char *end = p; // at a comma or the NUL
+    // Trim trailing whitespace (before the comma/end).
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+      end--;
+    }
+    size_t len = (size_t)(end - start);
+    if (len > HL_WORD_MAX) {
+      // Cap at 32 bytes without splitting a UTF-8 sequence.
+      len = HL_WORD_MAX;
+      while (len > 0 && ((unsigned char)start[len] & 0xC0) == 0x80) {
+        len--;
+      }
+      end = start + len;
+    }
+    if (len > 0) {
+      memcpy(s_hl_words[s_hl_count], start, len);
+      s_hl_words[s_hl_count][len] = '\0';
+      s_hl_count++;
+    }
+  }
+}
+
+//! Rebuild the normalized CSV (entries joined with ",") from the parsed table.
+static void hl_rebuild_csv(void) {
+  s_hl_csv[0] = '\0';
+  for (int i = 0; i < s_hl_count; i++) {
+    size_t l = strlen(s_hl_csv);
+    snprintf(s_hl_csv + l, sizeof(s_hl_csv) - l, "%s%s",
+             i ? "," : "", s_hl_words[i]);
+  }
+}
+
+//! Accessors (declared in common.h) — read by the timeline highlight engine.
+int highlight_word_count(void) {
+  return s_hl_count;
+}
+
+const char *highlight_word(int i) {
+  return (i >= 0 && i < s_hl_count) ? s_hl_words[i] : "";
+}
+
+const char *highlight_words_csv(void) {
+  return s_hl_csv;
+}
+
+//! Persist a new list (Clay -> watch) and re-parse it in place.
+void storage_highlight_set_words(const char *csv) {
+  hl_parse(csv ? csv : "");
+  hl_rebuild_csv();
+  // String payload (strlen + NUL), fits the <= 340 B budget.
+  persist_write_data(PERSIST_KEY_HIGHLIGHT, s_hl_csv, strlen(s_hl_csv) + 1);
+}
+
+// ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
@@ -192,6 +282,17 @@ void storage_load(void) {
       s_last_seen_count = i;
       break;
     }
+  }
+
+  // Highlight words (CSV string); absent/corrupt -> empty list (count 0).
+  s_hl_count = 0;
+  s_hl_csv[0] = '\0';
+  int got_hl = persist_read_data(PERSIST_KEY_HIGHLIGHT, s_hl_csv,
+                                 sizeof(s_hl_csv) - 1);
+  if (got_hl > 0) {
+    s_hl_csv[got_hl] = '\0';
+    hl_parse(s_hl_csv);
+    hl_rebuild_csv(); // normalize whatever came back from flash
   }
 }
 

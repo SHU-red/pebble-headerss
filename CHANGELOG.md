@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.1
+
+- **Word highlighting**: enter up to 10 words/phrases in the phone app
+  settings (Clay) — matched words render in accent + bold + underline in
+  the article summary and white + bold + underline in the heading. Whole
+  words, case-insensitive; hyphens are word boundaries so "nuclear" matches
+  inside "Nuclear-Fusion" while "ai" never matches inside "said". Matching
+  is a plain bounded substring scan on the watch (no regex, microseconds);
+  the hand-rolled layout engine (SDK 4.33 has no per-character positioning)
+  caches a run table per article so scrolling stays cheap. Words apply to
+  the open article immediately when saved.
+- **Startup crash fix**: the working-dialog pulse timer ran without a
+  liveness guard — when the dialog was popped while the timer was already
+  fired ("Timer does not exist"), the queued callback touched the freed text
+  layer (use-after-free → App fault at startup after the tree fetch). The
+  pulse callback now re-checks dialog state, reschedules itself only while
+  alive, and the dialog pop is guarded against a double dismiss racing the
+  asynchronous unload.
+- **Resource budget**: the highlight engine costs ~5 KB of
+  .text/.bss; `.text+.data+.bss` must stay ≤ 65535 B (uint16
+  `virtual_size`). Emery ring trimmed 96 → 72 articles; the 64 KB-class
+  platforms (basalt/chalk/diorite) run 56 articles and 48 feed nodes so
+  runtime heap (app_message buffers + windows) stays ~10 KB free. Fixed a
+  `PBL_PLATFORM_GABBRO` typo that silently shrank gabbro to the small
+  config — gabbro keeps 64/64.
+
 ## 0.2.0 — smart surface
 
 - **Important row**: dedicated root-menu entry for the FreshRSS priority

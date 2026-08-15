@@ -2,12 +2,12 @@
  * HeadeRSS — Clay configuration page definition.
  *
  * Built with @rebble/clay. Watch-bound messageKeys (AccentColor, DarkMode,
- * TouchEnabled) match entries of the "messageKeys" array in package.json so
- * Clay sends their values to the watch on save. The reading options
- * (MarkOnOpenList/MarkOnOpenDetail) live on the WATCH in the sub-menu
- * (toggle rows) and are not part of this page. The connection fields
- * (ServerUrl, User, ApiPass) are phone-side only: Clay persists them in
- * 'clay-settings' for prefill and the JS keeps a working copy in
+ * TouchEnabled, HighlightWords) match entries of the "messageKeys" array in
+ * package.json so Clay sends their values to the watch on save. The reading
+ * options (MarkOnOpenList/MarkOnOpenDetail) live on the WATCH in the
+ * sub-menu (toggle rows) and are not part of this page. The connection
+ * fields (ServerUrl, User, ApiPass) are phone-side only: Clay persists them
+ * in 'clay-settings' for prefill and the JS keeps a working copy in
  * localStorage; they never round-trip to the watch.
  */
 
@@ -77,6 +77,16 @@ module.exports = [
         'label': 'Touch',
         'description': 'Off while firmware touch bugs persist (PebbleOS #1865)',
         'defaultValue': false
+      },
+      {
+        'type': 'input',
+        'messageKey': 'HighlightWords',
+        'id': 'highlightWords',
+        'label': 'Highlight words',
+        'description': 'Comma-separated words/phrases (max 10) highlighted in articles',
+        'attributes': {
+          'maxlength': 200
+        }
       }
     ]
   },

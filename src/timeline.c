@@ -21,7 +21,6 @@
 #define SIDEBAR_W 26      // thick accent sidebar holding the icons
 #define HEADER_FLOOR 52   // minimum header height
 #define HEADER_META_H 22  // feed·time line + padding below the heading
-#define HEADING_MAX_H 42  // two GOTHIC_18 lines
 
 static Article s_articles[MAX_ARTICLES];
 static int32_t s_count;
@@ -51,13 +50,73 @@ static TextLayer *s_status;   // full-screen "Loading..." / "All caught up"
 static Layer *s_status_check; // accent GPath check above the status text
 static TextLayer *s_status_hint; // small hint under the status text
 
+// ---------------------------------------------------------------------------
+// Highlight layout engine — types (the engine itself lives below, before the
+// page surfaces). The reader draws the summary body and the article heading
+// from cached run tables instead of TextLayers, so words from the Clay
+// highlight list render in accent + bold + underline (body) or white +
+// underline (heading, which already sits on the accent bar). The layout is
+// computed ONCE per article (and again on words-change); scroll frames only
+// replay the cached runs — no measurement on draw.
+// ---------------------------------------------------------------------------
+
+#define HL_SPANS_MAX 32   // matched spans per text
+#define HL_RUNS_MAX 24    // runs per layout (12 B each); tail folds when full
+#define HL_MEASURE_W 4000 // one-line measurement box (never wraps)
+
+//! One cached run: a contiguous styled slice of the source text.
+typedef struct {
+  int16_t x, y;  // run box top-left; y = line top (relative to text origin)
+  int16_t w;     // run box width (px)
+  uint16_t off;  // byte offset of the slice in the source text
+  uint16_t len;  // byte length of the slice; 0 = literal ellipsis "…"
+  uint8_t style; // 0 = base font, 1 = highlight font
+} HlRun;
+
+//! Cached layout: a wrapped, run-annotated text.
+typedef struct {
+  int16_t height; // total layout height (px), a multiple of line_h
+  int16_t line_h; // single text line height (px)
+  uint8_t n;      // runs in use
+  HlRun runs[HL_RUNS_MAX];
+} HlLayout;
+
+//! A matched span of the source text (byte range).
+typedef struct {
+  uint16_t off;
+  uint16_t len;
+} HlSpan;
+
+//! Parameters for one layout pass.
+typedef struct {
+  const char *text; // source text (summary or title)
+  GFont base_font;  // style-0 font
+  GFont hl_font;    // style-1 font
+  int16_t width;    // wrap width (px)
+  int16_t max_lines; // 0 = unlimited; >0 = cap with a trailing ellipsis
+  HlLayout *out;    // destination layout
+} HlBuildParams;
+
+//! One styled piece of a wrap-token (a token splits at span boundaries, so
+//! "Nuclear-Fusion" with the pattern "nuclear" yields an hl "Nuclear" piece
+//! and a base "-Fusion" piece).
+typedef struct {
+  size_t off;   // byte offset in the source text
+  size_t len;   // byte length
+  uint8_t style; // 0 = base font, 1 = highlight font
+} HlSeg;
+
+#define HL_SEG_MAX 16 // pieces per wrap-token (pathological tail folds)
+
 // One article page: everything that slides during a transition. Two pages
 // exist so the transition can animate them against each other.
 typedef struct {
   Layer *root;        // container layer (slides)
   Layer *header;      // accent header (dynamic height)
   ScrollLayer *scroll; // summary body
-  TextLayer *body;    // wrapped summary, recreated per page
+  Layer *body;        // custom highlight body layer, recreated per page
+  HlLayout body_layout; // cached summary runs (per article / words-change)
+  HlLayout head_layout; // cached heading runs (2 lines max, ellipsis)
   int32_t idx;        // ring index this page shows
 } Page;
 
@@ -203,37 +262,521 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Highlight layout engine (word highlighting)
+// ---------------------------------------------------------------------------
+//
+// Matching rule: a pattern P matches at byte offset i iff P equals
+// T[i..i+len) ASCII-case-insensitively ([A-Z] -> [a-z]) and both neighbours
+// are boundaries (word chars are [A-Za-z0-9]; any other byte — hyphen,
+// apostrophe, dot, space, non-ASCII — is a boundary). First match wins,
+// overlapping matches are skipped, at most HL_SPANS_MAX spans per text.
+//
+// Runs: per line, adjacent same-style words (and the gaps between them) merge
+// into one run; style 0 = base font, 1 = highlight font. A run with len == 0
+// draws a literal ellipsis glyph ("…") — the heading's trailing-ellipsis
+// truncation. A word wider than the line is placed anyway and clipped by the
+// layer bounds (body), or ellipsized (heading).
+
+//! ASCII fold: [A-Z] -> [a-z], everything else compared as raw bytes.
+static char hl_fold_char(char c) {
+  return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+//! Word chars are [A-Za-z0-9]; any other byte (incl. non-ASCII) is a boundary.
+static bool hl_word_char(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9');
+}
+
+//! Does the pattern match T at byte offset i (with boundary checks)?
+static bool hl_match_at(const char *t, size_t tlen, const char *pat,
+                        size_t plen, size_t i) {
+  if (i + plen > tlen) {
+    return false;
+  }
+  for (size_t k = 0; k < plen; k++) {
+    if (hl_fold_char(t[i + k]) != hl_fold_char(pat[k])) {
+      return false;
+    }
+  }
+  bool before = (i == 0) || !hl_word_char(t[i - 1]);
+  bool after = (i + plen == tlen) || !hl_word_char(t[i + plen]);
+  return before && after;
+}
+
+//! Collect up to `cap` spans: every highlight word, first match wins,
+//! overlapping spans skipped (a later word never re-claims a matched range).
+static int hl_collect_spans(const char *text, HlSpan *spans, int cap) {
+  int n = 0;
+  size_t tlen = strlen(text);
+  for (int wi = 0; wi < highlight_word_count() && n < cap; wi++) {
+    const char *pat = highlight_word(wi);
+    size_t plen = strlen(pat);
+    if (plen == 0) {
+      continue;
+    }
+    for (size_t i = 0; i + plen <= tlen && n < cap;) {
+      if (hl_match_at(text, tlen, pat, plen, i)) {
+        bool overlap = false;
+        for (int k = 0; k < n; k++) {
+          size_t a0 = spans[k].off, a1 = (size_t)spans[k].off + spans[k].len;
+          if (i < a1 && a0 < i + plen) {
+            overlap = true;
+            break;
+          }
+        }
+        if (!overlap) {
+          spans[n].off = (uint16_t)i;
+          spans[n].len = (uint16_t)plen;
+          n++;
+        }
+        i += plen; // skip overlapping matches of the same word
+      } else {
+        i++;
+      }
+    }
+  }
+  return n;
+}
+
+//! Is byte position `pos` inside a matched span?
+static bool hl_span_contains(const HlSpan *spans, int n, size_t pos) {
+  for (int k = 0; k < n; k++) {
+    if ((size_t)spans[k].off <= pos &&
+        pos < (size_t)spans[k].off + spans[k].len) {
+      return true;
+    }
+  }
+  return false;
+}
+
+//! Split a wrap-token [woff, wend) into styled segments (contiguous pieces
+//! sharing a style). Matched spans start/end at boundaries, so they never cut
+//! a word-char run in half and the piece boundaries always sit between
+//! word-char runs / separators. Beyond `cap` pieces the tail folds into the
+//! previous piece (pathological, still consistent for drawing).
+static int hl_token_segments(const HlSpan *spans, int n, size_t woff,
+                             size_t wend, HlSeg *segs, int cap) {
+  int m = 0;
+  size_t pos = woff;
+  while (pos < wend) {
+    bool hl = hl_span_contains(spans, n, pos);
+    size_t end = wend;
+    if (hl) {
+      // The piece ends at the covering span's end.
+      for (int k = 0; k < n; k++) {
+        if ((size_t)spans[k].off <= pos &&
+            pos < (size_t)spans[k].off + spans[k].len) {
+          size_t e = (size_t)spans[k].off + spans[k].len;
+          if (e < end) {
+            end = e;
+          }
+        }
+      }
+    } else {
+      // The piece ends where the next span starts.
+      for (int k = 0; k < n; k++) {
+        size_t s = (size_t)spans[k].off;
+        if (s > pos && s < end) {
+          end = s;
+        }
+      }
+    }
+    if (m >= cap) {
+      segs[m - 1].len = wend - segs[m - 1].off; // fold the tail in
+      return m;
+    }
+    segs[m].off = pos;
+    segs[m].len = end - pos;
+    segs[m].style = hl ? 1 : 0;
+    m++;
+    pos = end;
+  }
+  return m;
+}
+
+//! Pixel width of a NUL-terminated string in the given font (one line).
+static int16_t hl_measure_text(const char *text, GFont font) {
+  GSize sz = graphics_text_layout_get_content_size(
+      text, font, GRect(0, 0, HL_MEASURE_W, 200),
+      GTextOverflowModeWordWrap, GTextAlignmentLeft);
+  return (int16_t)sz.w;
+}
+
+//! Pixel width of the byte slice T[off..off+len) (scratch >= len + 1).
+static int16_t hl_measure_slice(const char *t, size_t off, size_t len,
+                                GFont font, char *scratch) {
+  if (len == 0) {
+    return 0;
+  }
+  memcpy(scratch, t + off, len);
+  scratch[len] = '\0';
+  return hl_measure_text(scratch, font);
+}
+
+//! Longest UTF-8-safe prefix of T[off..off+len) that fits in `allowed` px.
+//! Returns the byte length (0 when even the first character does not fit —
+//! the ellipsis caller then drops the run instead); *out_w receives the
+//! measured width of that prefix.
+static size_t hl_prefix_fit(const char *t, size_t off, size_t len,
+                            int16_t allowed, GFont font, char *scratch,
+                            int16_t *out_w) {
+  size_t best = 0;
+  int16_t best_w = 0;
+  size_t k = 0;
+  while (k < len) {
+    k++;
+    while (k < len && ((unsigned char)t[off + k] & 0xC0) == 0x80) {
+      k++; // step over continuation bytes (never split a UTF-8 char)
+    }
+    int16_t w = hl_measure_slice(t, off, k, font, scratch);
+    if (w > allowed) {
+      break;
+    }
+    best = k;
+    best_w = w;
+  }
+  *out_w = best_w;
+  return best;
+}
+
+//! Append a trailing-ellipsis run to the last line of the layout, shrinking
+//! or dropping the line's trailing runs until the ellipsis fits the width.
+static void hl_add_ellipsis(HlLayout *lo, const char *text, GFont base_font,
+                            GFont hl_font, int16_t width, int16_t line_y,
+                            char *scratch) {
+  int last = lo->n - 1;
+  if (last < 0 || lo->runs[last].y != line_y) {
+    // The last line is empty: a lone ellipsis marks the cut.
+    if (lo->n < HL_RUNS_MAX) {
+      HlRun *r = &lo->runs[lo->n];
+      r->x = 0;
+      r->y = line_y;
+      r->w = hl_measure_text("\xE2\x80\xA6", base_font); // UTF-8 "…"
+      r->off = 0;
+      r->len = 0;
+      r->style = 0;
+      lo->n++;
+    }
+    return;
+  }
+  int first = last;
+  for (int k = last; k >= 0 && lo->runs[k].y == line_y; k--) {
+    first = k;
+  }
+  // True right edge of the line (runs tile; inter-style gaps are between the
+  // run boxes, so the extent is the last run's x + w, not the width sum).
+  int16_t ell_x = (int16_t)(lo->runs[last].x + lo->runs[last].w);
+  int k = last;
+  while (k >= first) {
+    // Measure the ellipsis in the style of the run it will follow; the final
+    // run is re-measured after the loop, once the style is certain.
+    int16_t ew = hl_measure_text("\xE2\x80\xA6",
+                                 lo->runs[k].style ? hl_font : base_font);
+    if (ell_x + ew <= width) {
+      break; // the ellipsis fits after run k
+    }
+    int16_t need = (int16_t)(ell_x + ew - width); // px to free
+    HlRun *r = &lo->runs[k];
+    if (r->w > need) {
+      int16_t kept_w = 0;
+      size_t keep = hl_prefix_fit(text, r->off, r->len,
+                                  (int16_t)(r->w - need),
+                                  r->style ? hl_font : base_font, scratch,
+                                  &kept_w);
+      if (keep > 0) {
+        r->len = (uint16_t)keep;
+        r->w = kept_w;
+        ell_x = (int16_t)(r->x + r->w);
+        break;
+      }
+      // Even one character is too wide: drop the run below.
+    }
+    // Shrinking cannot free enough: drop run k (frees its width plus the gap
+    // before it — the ellipsis will sit right after the previous run).
+    lo->n = k;
+    ell_x = (k > first) ? (int16_t)(lo->runs[k - 1].x + lo->runs[k - 1].w)
+                        : 0;
+    k--;
+  }
+  if (lo->n < HL_RUNS_MAX) {
+    uint8_t estyle = (lo->n > 0) ? lo->runs[lo->n - 1].style : 0;
+    int16_t ew = hl_measure_text("\xE2\x80\xA6",
+                                 estyle ? hl_font : base_font);
+    HlRun *r = &lo->runs[lo->n];
+    r->x = ell_x;
+    r->y = line_y;
+    r->w = ew;
+    r->off = 0;
+    r->len = 0;
+    r->style = estyle;
+    lo->n++;
+  }
+}
+
+//! Layout pass: word-wrap the text into a cached run table. Hard newlines
+//! break lines; whitespace collapses to single-space gaps; with max_lines >
+//! 0 overflowing text is cut with a trailing ellipsis.
+static void hl_build_layout(const HlBuildParams *p) {
+  HlLayout *lo = p->out;
+  const char *t = p->text;
+  size_t tlen = strlen(t);
+  lo->n = 0;
+  lo->height = 0;
+
+  GSize lh = graphics_text_layout_get_content_size(
+      "Ag", p->base_font, GRect(0, 0, HL_MEASURE_W, 200),
+      GTextOverflowModeWordWrap, GTextAlignmentLeft);
+  lo->line_h = (int16_t)lh.h;
+
+  int16_t base_space = hl_measure_text(" ", p->base_font);
+  int16_t hl_space = hl_measure_text(" ", p->hl_font);
+  char scratch[141]; // longest slice: Article.summary[140]
+
+  HlSpan spans[HL_SPANS_MAX];
+  int nspans = hl_collect_spans(t, spans, HL_SPANS_MAX);
+
+  int16_t line_x = 0;     // width consumed on the current line
+  int16_t line_y = 0;     // top of the current line
+  bool have_word = false; // current line holds at least one word
+  bool truncated = false; // max_lines cut the text short
+  int cur = -1;           // open run index, -1 = none
+  int16_t cur_w = 0;      // width accumulated into the open run
+
+  size_t i = 0;
+  while (i < tlen) {
+    // Collapse horizontal whitespace; count gap chars before the next word.
+    size_t gap_chars = 0;
+    while (i < tlen && (t[i] == ' ' || t[i] == '\t' || t[i] == '\r')) {
+      i++;
+      gap_chars++;
+    }
+    // Newlines are hard line breaks.
+    while (i < tlen && t[i] == '\n') {
+      if (have_word) {
+        if (cur >= 0) {
+          lo->runs[cur].w = cur_w;
+          cur = -1;
+          cur_w = 0;
+        }
+        have_word = false;
+      }
+      line_x = 0;
+      line_y += lo->line_h;
+      i++;
+      while (i < tlen && (t[i] == ' ' || t[i] == '\t' || t[i] == '\r')) {
+        i++; // leading whitespace of the next line is dropped
+      }
+      gap_chars = 0;
+    }
+    if (i >= tlen) {
+      break;
+    }
+    if (p->max_lines > 0 && line_y >= (int16_t)(p->max_lines * lo->line_h)) {
+      truncated = true; // a word would land beyond the cap
+      break;
+    }
+    size_t woff = i;
+    while (i < tlen && t[i] != ' ' && t[i] != '\t' && t[i] != '\r' &&
+           t[i] != '\n') {
+      i++;
+    }
+    size_t wend = i;
+
+    // Wrap-token [woff, wend): split into styled segments (a token never
+    // splits across lines — wrap on the sum of the segment widths).
+    HlSeg segs[HL_SEG_MAX];
+    int msegs = hl_token_segments(spans, nspans, woff, wend, segs,
+                                  HL_SEG_MAX);
+    int16_t tw = 0;
+    for (int s = 0; s < msegs; s++) {
+      tw += hl_measure_slice(t, segs[s].off, segs[s].len,
+                             segs[s].style ? p->hl_font : p->base_font,
+                             scratch);
+    }
+    int16_t gap_w = 0;
+    if (have_word) {
+      gap_w = (int16_t)(gap_chars * (segs[0].style ? hl_space : base_space));
+    }
+    if (have_word && line_x + gap_w + tw > p->width) {
+      if (p->max_lines > 0 &&
+          line_y + lo->line_h >= (int16_t)(p->max_lines * lo->line_h)) {
+        truncated = true; // wrapping would exceed the cap
+        break;
+      }
+      if (cur >= 0) {
+        lo->runs[cur].w = cur_w;
+        cur = -1;
+        cur_w = 0;
+      }
+      have_word = false;
+      line_x = 0;
+      line_y += lo->line_h;
+      gap_w = 0;
+    }
+    // Emit the segments: extend the open run when the style matches, else
+    // open a new run (or fold into nothing when the table is full).
+    for (int s = 0; s < msegs; s++) {
+      size_t soff = segs[s].off;
+      size_t slen = segs[s].len;
+      uint8_t sstyle = segs[s].style;
+      GFont sf = sstyle ? p->hl_font : p->base_font;
+      int16_t sw = hl_measure_slice(t, soff, slen, sf, scratch);
+      int16_t gap = (s == 0 && have_word) ? gap_w : 0;
+      if (cur >= 0 && sstyle == lo->runs[cur].style) {
+        lo->runs[cur].len = (uint16_t)(soff + slen - lo->runs[cur].off);
+        line_x += gap + sw;
+        cur_w += gap + sw;
+      } else {
+        if (cur >= 0) {
+          lo->runs[cur].w = cur_w;
+        }
+        if (lo->n < HL_RUNS_MAX) {
+          cur = lo->n;
+          HlRun *r = &lo->runs[cur];
+          r->x = line_x + gap;
+          r->y = line_y;
+          r->off = (uint16_t)soff;
+          r->len = (uint16_t)slen;
+          r->w = 0;
+          r->style = sstyle;
+          lo->n++;
+          cur_w = sw;
+        } else {
+          cur = -1;
+          cur_w = 0;
+        }
+        line_x += gap + sw;
+        have_word = true;
+      }
+    }
+  }
+  if (cur >= 0) {
+    lo->runs[cur].w = cur_w; // close the final run
+  }
+  if (tlen > 0 && t[tlen - 1] == '\n') {
+    line_y += lo->line_h; // trailing newline: one empty line
+  }
+  if (have_word) {
+    line_y += lo->line_h; // the current line's own height
+  }
+  if (p->max_lines > 0 && line_y > (int16_t)(p->max_lines * lo->line_h)) {
+    line_y = (int16_t)(p->max_lines * lo->line_h); // cap empty overhang
+  }
+  lo->height = line_y;
+
+  if (p->max_lines > 0 && (truncated || (have_word && line_x > p->width))) {
+    int16_t ell_y = line_y;
+    if (ell_y >= (int16_t)(p->max_lines * lo->line_h)) {
+      ell_y = (int16_t)((p->max_lines - 1) * lo->line_h);
+    }
+    hl_add_ellipsis(lo, t, p->base_font, p->hl_font, p->width, ell_y,
+                    scratch);
+  }
+}
+
+//! Replay a cached layout. ox/oy offset the text origin (the layer position).
+static void hl_draw(GContext *ctx, const char *text, const HlLayout *lo,
+                    int16_t ox, int16_t oy, GFont base_font, GFont hl_font,
+                    GColor base_c, GColor hl_c) {
+  char scratch[141];
+  for (int k = 0; k < lo->n; k++) {
+    const HlRun *r = &lo->runs[k];
+    GFont f = r->style ? hl_font : base_font;
+    graphics_context_set_text_color(ctx, r->style ? hl_c : base_c);
+    // A very wide one-line box: glyphs start at the box origin and are never
+    // wrapped; the layer bounds supply the real clip.
+    GRect box = GRect(ox + r->x, oy + r->y, HL_MEASURE_W, lo->line_h);
+    if (r->len == 0) {
+      graphics_draw_text(ctx, "\xE2\x80\xA6", f, box,
+                         GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+    } else {
+      memcpy(scratch, text + r->off, r->len);
+      scratch[r->len] = '\0';
+      graphics_draw_text(ctx, scratch, f, box,
+                         GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+    }
+    if (r->style) {
+      // 2 px underline just below the baseline (GOTHIC_18 ascent ~ line_h-4).
+      int16_t uy = oy + r->y + lo->line_h - 4;
+      graphics_context_set_stroke_color(ctx, hl_c);
+      graphics_context_set_stroke_width(ctx, 2);
+      graphics_draw_line(ctx, GPoint(ox + r->x, uy),
+                         GPoint(ox + r->x + r->w, uy));
+    }
+  }
+}
+
+//! Which page a body layer belongs to (there are only two pages).
+static int body_page_idx(Layer *body) {
+  for (int i = 0; i < 2; i++) {
+    if (s_pages[i].body == body) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+//! Summary body: paints the page background and replays the cached runs
+//! (base words in theme_fg, highlighted words in accent + bold + underline).
+static void body_update(Layer *layer, GContext *ctx) {
+  int pi = body_page_idx(layer);
+  if (pi < 0) {
+    return;
+  }
+  const Page *p = &s_pages[pi];
+  const Article *a =
+      (p->idx >= 0 && p->idx < s_count) ? &s_articles[p->idx] : NULL;
+  if (!a) {
+    return;
+  }
+  graphics_context_set_fill_color(ctx, theme_bg());
+  graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
+  hl_draw(ctx, a->summary, &p->body_layout, 0, 0,
+          fonts_get_system_font(FONT_KEY_GOTHIC_18),
+          fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+          theme_fg(), s_accent);
+}
+
+// ---------------------------------------------------------------------------
 // Page surfaces
 // ---------------------------------------------------------------------------
 
-//! Which ring index a header layer belongs to (there are only two pages).
-static int32_t header_article_idx(Layer *header) {
+//! Which page a header layer belongs to (there are only two pages).
+static int header_page_idx(Layer *header) {
   for (int i = 0; i < 2; i++) {
     if (s_pages[i].header == header) {
-      return s_pages[i].idx;
+      return i;
     }
   }
   return -1;
 }
 
 //! Accent header bar: always accent background with black text — the read
-//! state lives in the sidebar icons, not the colors.
+//! state lives in the sidebar icons, not the colors. The heading is drawn
+//! from the cached highlight layout: the whole title keeps its bold look,
+//! highlighted words render white + underlined (accent-on-accent would
+//! vanish, so the highlight color is white here).
 static void header_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
 
   graphics_context_set_fill_color(ctx, s_accent);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 
-  int32_t idx = header_article_idx(layer);
-  const Article *a = (idx >= 0 && idx < s_count) ? &s_articles[idx] : NULL;
+  int pi = header_page_idx(layer);
+  if (pi < 0) {
+    return;
+  }
+  const Page *p = &s_pages[pi];
+  const Article *a =
+      (p->idx >= 0 && p->idx < s_count) ? &s_articles[p->idx] : NULL;
   if (!a) {
     return;
   }
 
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, a->title, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-                     GRect(4, 2, b.size.w - SIDEBAR_W - 8, HEADING_MAX_H),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  GFont heading_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  hl_draw(ctx, a->title, &p->head_layout, 4, 2, heading_font, heading_font,
+          GColorBlack, GColorWhite);
 
   char meta[48];
   char t[16];
@@ -245,31 +788,44 @@ static void header_update(Layer *layer, GContext *ctx) {
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 }
 
-//! Dynamic header height: heading (capped at two GOTHIC_18 lines) plus room
-//! for the feed·time line, floored at 52 px.
-static int16_t header_height_for(const Article *a) {
-  GSize sz = graphics_text_layout_get_content_size(
-      a->title, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-      GRect(4, 0, s_win_w - SIDEBAR_W - 8, 1000),
-      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
-  int32_t h = sz.h;
-  if (h > HEADING_MAX_H) {
-    h = HEADING_MAX_H;
-  }
-  h += HEADER_META_H;
-  return (int16_t)(h < HEADER_FLOOR ? HEADER_FLOOR : h);
-}
-
 //! Build one article page (header + scrollable summary) into a fresh set of
 //! layers; the body text stays clear of the sidebar.
 static void page_build(Page *p, int32_t idx) {
   const Article *a = &s_articles[idx];
   p->idx = idx;
 
+  // Cached highlight layouts: heading (two GOTHIC_18 lines max, trailing
+  // ellipsis, the whole title stays bold) and summary body (unlimited lines,
+  // base GOTHIC_18 with GOTHIC_18_BOLD for highlighted words).
+  GFont gothic18 = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+  GFont gothic18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  int16_t text_w = (int16_t)(s_win_w - SIDEBAR_W - 8);
+  hl_build_layout(&(HlBuildParams){
+    .text = a->title,
+    .base_font = gothic18b,
+    .hl_font = gothic18b,
+    .width = text_w,
+    .max_lines = 2,
+    .out = &p->head_layout,
+  });
+  hl_build_layout(&(HlBuildParams){
+    .text = a->summary,
+    .base_font = gothic18,
+    .hl_font = gothic18b,
+    .width = text_w,
+    .max_lines = 0,
+    .out = &p->body_layout,
+  });
+
   p->root = layer_create(GRect(0, TOP_BAR_H, s_win_w, s_view_h));
   layer_add_child(s_page_area, p->root);
 
-  int16_t hh = header_height_for(a);
+  // Header height from the actual (capped) heading layout: one or two
+  // GOTHIC_18 lines + room for the feed·time line, floored at HEADER_FLOOR.
+  int16_t hh = (int16_t)(p->head_layout.height + HEADER_META_H);
+  if (hh < HEADER_FLOOR) {
+    hh = HEADER_FLOOR;
+  }
   p->header = layer_create(GRect(0, 0, s_win_w, hh));
   layer_set_update_proc(p->header, header_update);
   layer_add_child(p->root, p->header);
@@ -281,20 +837,12 @@ static void page_build(Page *p, int32_t idx) {
   scroll_layer_set_shadow_hidden(p->scroll, true);
   layer_add_child(p->root, scroll_layer_get_layer(p->scroll));
 
-  GSize sz = graphics_text_layout_get_content_size(
-      a->summary, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(4, 2, s_win_w - SIDEBAR_W - 8, 1000),
-      GTextOverflowModeWordWrap, GTextAlignmentLeft);
-  int32_t body_h = sz.h + 6; // 2 px top pad + 4 px air at the bottom
+  int32_t body_h = p->body_layout.height + 6; // 2 px top pad + 4 px air
 
-  p->body = text_layer_create(GRect(4, 2, s_win_w - SIDEBAR_W - 8, sz.h));
-  text_layer_set_font(p->body, fonts_get_system_font(FONT_KEY_GOTHIC_18));
-  text_layer_set_text_alignment(p->body, GTextAlignmentLeft);
-  text_layer_set_overflow_mode(p->body, GTextOverflowModeWordWrap);
-  text_layer_set_background_color(p->body, theme_bg());
-  text_layer_set_text_color(p->body, theme_fg());
-  text_layer_set_text(p->body, a->summary);
-  layer_add_child(scroll_layer_get_layer(p->scroll), text_layer_get_layer(p->body));
+  p->body = layer_create(GRect(4, 2, s_win_w - SIDEBAR_W - 8,
+                               p->body_layout.height));
+  layer_set_update_proc(p->body, body_update);
+  layer_add_child(scroll_layer_get_layer(p->scroll), p->body);
 
   scroll_layer_set_content_size(p->scroll, GSize(s_win_w - SIDEBAR_W, body_h));
   scroll_layer_set_content_offset(p->scroll, GPointZero, false);
@@ -302,7 +850,7 @@ static void page_build(Page *p, int32_t idx) {
 
 static void page_destroy(Page *p) {
   if (p->body) {
-    text_layer_destroy(p->body);
+    layer_destroy(p->body);
     p->body = NULL;
   }
   if (p->scroll) {
@@ -904,8 +1452,7 @@ void timeline_apply_settings(void) {
   for (int i = 0; i < 2; i++) {
     Page *p = &s_pages[i];
     if (p->body) {
-      text_layer_set_background_color(p->body, theme_bg());
-      text_layer_set_text_color(p->body, theme_fg());
+      layer_mark_dirty(p->body); // colors are read at draw time
     }
     if (p->header) {
       layer_mark_dirty(p->header);
@@ -913,5 +1460,61 @@ void timeline_apply_settings(void) {
   }
   if (s_sidebar) {
     layer_mark_dirty(s_sidebar);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Highlight words live update
+// ---------------------------------------------------------------------------
+
+//! A new highlight-word list arrived from Clay (proto.c): re-layout the open
+//! reader's pages (body + heading) in place, resize what the layout dictates
+//! and mark everything dirty. No-op while no reader is open.
+void timeline_highlight_words_changed(void) {
+  if (!s_tl_window || s_count == 0) {
+    return;
+  }
+  GFont gothic18 = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+  GFont gothic18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  int16_t text_w = (int16_t)(s_win_w - SIDEBAR_W - 8);
+  for (int i = 0; i < 2; i++) {
+    Page *p = &s_pages[i];
+    if (p->idx < 0 || p->idx >= s_count) {
+      continue;
+    }
+    const Article *a = &s_articles[p->idx];
+    hl_build_layout(&(HlBuildParams){
+      .text = a->title, .base_font = gothic18b, .hl_font = gothic18b,
+      .width = text_w, .max_lines = 2, .out = &p->head_layout,
+    });
+    hl_build_layout(&(HlBuildParams){
+      .text = a->summary, .base_font = gothic18, .hl_font = gothic18b,
+      .width = text_w, .max_lines = 0, .out = &p->body_layout,
+    });
+
+    // The body layer follows the layout height; the scroll content adds the
+    // usual 2 px top pad + 4 px air at the bottom.
+    layer_set_frame(p->body, GRect(4, 2, s_win_w - SIDEBAR_W - 8,
+                                   p->body_layout.height));
+    int32_t body_h = p->body_layout.height + 6;
+    GSize content = scroll_layer_get_content_size(p->scroll);
+    if (content.h != body_h) {
+      scroll_layer_set_content_size(p->scroll,
+                                    GSize(s_win_w - SIDEBAR_W, body_h));
+    }
+    // The heading layout is capped at two lines (both fonts are the same
+    // GOTHIC_18_BOLD here), so the header height is stable across word-list
+    // changes; recompute and resize anyway for robustness.
+    int16_t hh = (int16_t)(p->head_layout.height + HEADER_META_H);
+    if (hh < HEADER_FLOOR) {
+      hh = HEADER_FLOOR;
+    }
+    if (layer_get_frame(p->header).size.h != hh) {
+      layer_set_frame(p->header, GRect(0, 0, s_win_w, hh));
+      layer_set_frame(scroll_layer_get_layer(p->scroll),
+                      GRect(0, hh, s_win_w, s_view_h - hh));
+    }
+    layer_mark_dirty(p->body);
+    layer_mark_dirty(p->header);
   }
 }

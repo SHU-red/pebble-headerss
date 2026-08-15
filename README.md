@@ -35,6 +35,10 @@ sidebar (read/unread dot + star).
   server for feed/folder streams; "All unread" always shows only unread
 - **Star** — long-press SELECT toggles the star; starred articles show a
   yellow star icon
+- **Word highlighting** — set up to 10 words/phrases in the phone settings;
+  matches are accent + bold + underlined in the summary and white + bold +
+  underlined in the heading (whole words, case-insensitive, hyphens count
+  as boundaries); updates live while reading
 - **Per-feed actions** — long-press SELECT on a feed row: **Mark all read**
   (with confirm) or **Refresh** (re-fetch and open at the newest)
 - **Triage drain** — optional (sub-menu): inside Starred, advancing past an

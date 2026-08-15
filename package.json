@@ -1,7 +1,7 @@
 {
   "name": "pebble-headerss",
   "author": "SHU-red",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "keywords": [
     "pebble-app",
     "freshrss",
@@ -69,7 +69,8 @@
       "ImportantRow",
       "TriageDrain",
       "NewDot",
-      "ProgressLine"
+      "ProgressLine",
+      "HighlightWords"
     ],
     "resources": {
       "media": [

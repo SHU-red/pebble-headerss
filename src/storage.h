@@ -39,4 +39,9 @@ GColor theme_bg(void);
 GColor theme_fg(void);
 GColor theme_muted(void);
 
+//! Persist a new highlight-word CSV (Clay -> watch, comma-separated, max
+//! HL_WORDS_MAX entries of HL_WORD_MAX bytes) and re-parse it in place.
+//! Getter accessors are declared in common.h.
+void storage_highlight_set_words(const char *csv);
+
 #endif

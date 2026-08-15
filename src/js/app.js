@@ -19,9 +19,9 @@
  *
  * Clay auto-handles the config webview: on save it writes 'clay-settings'
  * for page prefill and sends every watch-bound messageKey value (AccentColor,
- * DarkMode, TouchEnabled) to the WATCH via AppMessage; the watch persists
- * them durably. The reading toggles live on the watch (sub-menu). The
- * connection fields
+ * DarkMode, TouchEnabled, HighlightWords) to the WATCH via AppMessage; the
+ * watch persists them durably. The reading toggles live on the watch
+ * (sub-menu). The connection fields
  * (ServerUrl, User, ApiPass) are phone-side only — 'clay-settings' is the
  * prefill cache and 'headerssConfig' (CONFIG_KEY) our working copy; on
  * 'ready' we pull the watch's durable settings back and rewrite the prefill.
@@ -42,8 +42,50 @@ var DEFAULT_FETCH_N = 50;
 // writes 'clay-settings' for page prefill, and sends every watch-bound
 // messageKey value to the WATCH via AppMessage. The watch persists them
 // durably in its flash; this JS pulls the durable copy back on 'ready'.
-// No manual event handling needed.
+// The only manual event handling is the webviewclosed listener below,
+// which normalizes the HighlightWords CSV (Clay forwards it verbatim).
 var clay = new Clay(clayConfig);
+
+// Clay's own webviewclosed listener (registered above, so it runs first)
+// sends HighlightWords to the watch as typed. The watch must store the
+// trimmed form for its whole-word boundary matching — "nuclear, ai", not
+// " nuclear , ai " — so this second listener re-sends the trimmed CSV and
+// rewrites the 'clay-settings' prefill with the same string. The watch's
+// reply on 'ready' (handleConfigReply) keeps that cache in sync with the
+// durable copy, exactly like AccentColor/DarkMode/TouchEnabled.
+Pebble.addEventListener('webviewclosed', function (e) {
+  if (!e || !e.response) {
+    return;
+  }
+  var raw = e.response;
+  try {
+    // The response is the serialized config JSON (values {value: ...}
+    // wrapped); it may arrive URL-encoded, mirror Clay's check.
+    raw = raw.match(/^\{/) ? raw : decodeURIComponent(raw);
+    var parsed = JSON.parse(raw);
+    var words = parsed.HighlightWords;
+    if (words && typeof words === 'object' && 'value' in words) {
+      words = words.value;
+    }
+    words = String(words === undefined || words === null ? '' : words).trim();
+    try {
+      var cached = JSON.parse(localStorage.getItem(CLAY_SETTINGS_KEY) || '{}');
+      cached.HighlightWords = words;
+      localStorage.setItem(CLAY_SETTINGS_KEY, JSON.stringify(cached));
+    } catch (err) {
+      // best effort — the prefill is only a cache
+    }
+    var msg = {};
+    msg.HighlightWords = words;
+    Pebble.sendAppMessage(msg, function () {
+      console.log('config: highlight words sent to watch');
+    }, function (err) {
+      console.log('config: failed to send highlight words: ' + JSON.stringify(err));
+    });
+  } catch (err) {
+    console.log('config: highlight words normalization failed: ' + err);
+  }
+});
 
 // Monotonic generation counters for the streaming flows. If a flow is
 // re-triggered while a previous chain is still streaming, the stale chain
@@ -519,6 +561,7 @@ function handleConfigReply(payload) {
   copyIn('AccentColor');
   copyIn('DarkMode');
   copyIn('TouchEnabled');
+  copyIn('HighlightWords');
   try {
     localStorage.setItem(CLAY_SETTINGS_KEY, JSON.stringify(settings));
   } catch (err) {

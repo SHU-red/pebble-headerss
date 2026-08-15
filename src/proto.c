@@ -288,6 +288,14 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     return;
   }
 
+  // Highlight words from Clay: persist the new list and re-layout an open
+  // reader so the change applies to the current article immediately.
+  if ((t = dict_find(iter, MESSAGE_KEY_HighlightWords))) {
+    storage_highlight_set_words(t->value->cstring);
+    timeline_highlight_words_changed();
+    return;
+  }
+
   // Config request from the JS (on 'ready'): reply with the durable copy.
   if (dict_find(iter, MESSAGE_KEY_RequestConfig)) {
     proto_reply_config();
