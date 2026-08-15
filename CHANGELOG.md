@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.9
+
+- **The stuck-at-the-end bug, root-caused at the SDK level**: Pebble's
+  scroll content offset is the content *origin* — 0 at the top, NEGATIVE
+  when scrolled, `frame.h − content.h` at the very bottom. The DOWN
+  handler compared it as a positive offset, so at the end of a long
+  article the "at the bottom" condition never fired: DOWN kept calling the
+  scroll handler (which clamped to nothing) and never advanced. The
+  comparison is now `offset.y <= frame.h − content.h + 2` — DOWN scrolls
+  the whole heading+summary unit, reaches the last word, and a further
+  DOWN advances. The UP handler had the same convention bug (it could
+  never scroll the body back up — only regress); fixed too.
+
 ## 0.3.8
 
 - **Group dividers** in the menus: a thin muted line below "All unread" and

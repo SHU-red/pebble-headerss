@@ -1353,14 +1353,16 @@ static void maybe_regress(void) {
 // Buttons
 // ---------------------------------------------------------------------------
 
-//! UP scrolls the body up; past the top it goes back to the previously
-//! read article (still in the ring from this session).
+//! UP scrolls the body up; past the top (content offset back at 0) it goes
+//! back to the previously read article (still in the ring from this
+//! session). The SDK's offset is the content origin: negative when scrolled,
+//! 0 at the top.
 static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing) {
     return;
   }
   ScrollLayer *scroll = cur_page()->scroll;
-  if (scroll_layer_get_content_offset(scroll).y > 0) {
+  if (scroll_layer_get_content_offset(scroll).y < 0) {
     scroll_layer_scroll_up_click_handler(rec, scroll);
   } else {
     maybe_regress();
@@ -1381,10 +1383,13 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   GRect frame = layer_get_frame(scroll_layer_get_layer(scroll));
   GSize content = scroll_layer_get_content_size(scroll);
   GPoint offset = scroll_layer_get_content_offset(scroll);
+  // The SDK clips the content offset to [frame.h - content.h, 0] — the
+  // content origin: 0 at the top, NEGATIVE when scrolled, frame.h-content.h
+  // at the very bottom. "At the bottom" is therefore offset.y <=
+  // frame.h - content.h (+2 slack), NOT a positive comparison.
+  bool at_bottom = (offset.y <= frame.size.h - content.h + 2);
   bool fetching_here = (s_full_idx == s_idx && s_full_fetching && !s_full_done);
-  if (!fetching_here &&
-      (content.h <= frame.size.h + 2 ||
-       offset.y >= content.h - frame.size.h - 2)) {
+  if (!fetching_here && at_bottom) {
     maybe_advance();
   } else {
     scroll_layer_scroll_down_click_handler(rec, scroll);
