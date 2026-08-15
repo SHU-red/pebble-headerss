@@ -29,11 +29,11 @@
 // full-height sidebar ~10 px apart, starting ~8 px from the very top.
 #define SIDEBAR_ICON_GAP 12 // vertical gap between the indicators
 #define SIDEBAR_DISC_D 20   // read/unread disc diameter
-#define SIDEBAR_STAR_H 26   // fav star height
+#define SIDEBAR_STAR_H 30   // fav star height
 #define SIDEBAR_MAG_H 24    // match magnifier glyph height
 // The indicator column is vertically centered beside the physical SELECT
-// button (right edge, mid-screen): total stack = 26+12+20+12+24 = 94 px.
-#define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 94) / 2)
+// button (right edge, mid-screen): total stack = 30+12+20+12+24 = 98 px.
+#define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 98) / 2)
 
 // Highlight alarm color: the highlight M badge and ALL matched words (body
 // and title) share this one color so the connection is obvious.
@@ -186,14 +186,14 @@ static Animation *s_anim_b; // spare page slides in
 static GRect s_from_a, s_to_a, s_from_b, s_to_b;
 static AppTimer *s_transition_watchdog; // failsafe: releases a wedged transition
 
-// Shared draw path: a chunky star (~26 px) — the favourite indicator in the
+// Shared draw path: a chunky star (~30 px) — the favourite indicator in the
 // sidebar. Bright chrome-yellow when starred (pops on the accent bar),
 // black otherwise.
 static const GPathInfo STAR_ICON_INFO = {
   .num_points = 10,
   .points = (GPoint[10]){
-    { 0, -10 }, { 3, -3 }, { 10, -3 }, { 5, 2 }, { 8, 10 },
-    { 0, 6 }, { -8, 10 }, { -5, 2 }, { -10, -3 }, { -3, -3 },
+    { 0, -12 }, { 4, -4 }, { 12, -4 }, { 6, 2 }, { 10, 12 },
+    { 0, 7 }, { -10, 12 }, { -6, 2 }, { -12, -4 }, { -4, -4 },
   },
 };
 
