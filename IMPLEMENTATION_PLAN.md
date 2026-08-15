@@ -18,6 +18,8 @@ reference app `pebble-ha-launcher`.
 | Second API (Fever) | **Not supported** — effort is NOT "very low" once data-model work counts; value nil for a watch | flat groups (no tree), no per-feed unread counts, 50-item cursor pagination, no refresh, group titles mangled (`/` → U+FF0F), auth quirk (POST-only key, `auth:0` on HTTP 200) |
 | Auth | ClientLogin (per-user **API password**, not the main password) → `Auth=<user>/<sha1>`; `Authorization: GoogleLogin auth=…` header; `T=x` token on mutating POSTs | Live: 401 `Unauthorized!` when API password unset/mismatched; `T=x`/`T=`/`T=<real>` all accepted |
 | UI pattern | Reference `pebble-ha-launcher` (SDK3, waf, MenuLayer, Clay, chunked AppMessage streaming) + **native Timeline look** for the reading view (vertical accent bar, dots, animated pin) | Launcher deep-dive; user requirement |
+| Mark-read | Auto on open, gated by TWO settings toggles ("Mark read on open (timeline)" / "(detail)"), both default ON; both off → articles stay unread, starring only | user decision |
+| Settings scope | FreshRSS URL, username, API password + dark/light, accent color, touch toggle, the two mark-read toggles | user decision |
 | Platforms | Same 5 color platforms as launcher: basalt, chalk, diorite, **emery (Time 2)**, gabbro | mirror reference app |
 | Toolchain | Pebble Tool v5.0.39 / SDK v4.33 present on this machine; `pebble build`; node 22 for JS dev | local check |
 
@@ -97,7 +99,9 @@ Watch→phone: `FetchTree` (refresh flag), `FetchItems` (stream, continuation, n
 `FeedCount` + per-feed `FeedName|FeedId|FeedUnread|FeedParent` streamed one per
 message, `ItemCount` + per-item `ItemId|ItemTitle|ItemFeed|ItemTime|ItemRead|ItemStarred`
 streamed one per message chained on outbox ack (launcher pattern, generation-counter
-guarded), `Continuation` (opaque token kept on both sides).
+guarded), `Continuation` (opaque token kept on both sides). Watch-bound settings
+keys (Clay → watch, launcher pattern): `AccentColor`, `DarkMode`, `TouchEnabled`,
+`AutoClose`, `MarkOnOpenList`, `MarkOnOpenDetail`.
 
 Buffers: `app_message_open(4096, 1024)` (launcher-verified). One article per message
 (~200 B incl. title ≤ 64) is safe. Batch mark-read: up to ~12 decimal ids per
@@ -175,19 +179,24 @@ Implementation (reuse-first, then custom):
   (resource ICON_STAR-style, white variant on dark).
 - Buttons in timeline: UP/DOWN scroll (MenuLayer native); SELECT opens the article
   detail; long-press SELECT toggles star; BACK pops to tree.
+- Mark-read on open: selecting an article from the timeline marks it read only if
+  **Mark read on open (timeline)** is on; entering/advancing articles in the detail
+  flow marks read only if **Mark read on open (detail)** is on. Both default ON;
+  with both off the user can star articles while they stay unread.
 - Detail card (native notification-card style, launcher dialog idiom): title, feed,
   time, first ~200 chars of summary (HTML stripped in JS before sending), star
-  toggle; SELECT = mark read + advance to next article (auto-advance loop through
-  the stream), BACK = back.
+  toggle; SELECT = advance to next article (marks read per the detail toggle),
+  BACK = back.
 - Animation budget: selection highlight, pin glide, page-append rows fade in — all
   `animation_schedule`-based; no busy loops.
 
 ### 4.3 Settings (UP from row 0)
 
-Clay page: FreshRSS URL, username, API password; appearance (dark/light, accent
-color, touch toggle, auto-close). Watch-bound sub-menu additionally: Refresh tree,
-Mark all read, stream-jump (All unread / Starred). Mirrors launcher config split;
-`RequestConfig` re-sync on launch.
+Clay page: FreshRSS URL, username, API password; behaviour: **Mark read on open
+(timeline)** + **Mark read on open (detail)** toggles (both default ON);
+appearance: dark/light, accent color, touch toggle, auto-close. Watch-bound
+sub-menu additionally: Refresh tree, Mark all read, stream-jump (All unread /
+Starred). Mirrors launcher config split; `RequestConfig` re-sync on launch.
 
 ---
 
@@ -241,16 +250,21 @@ Scenarios: auth failure (wrong API password) → guidance; tree with nested fold
 (News/HN) renders hierarchy + badges; folder "All articles" recursion [resolve
 VERIFY item]; pagination over >50 items; mark read removes badge; star → appears in
 Starred; mark-all-as-read per feed/folder/global; offline/phone-unreachable errors;
-memory: ring buffer drop/re-fetch on long scroll.
+memory: ring buffer drop/re-fetch on long scroll; both mark-read toggles OFF → starring leaves articles unread.
 
 ---
 
-## 8. Open questions (asked to user before implementation)
+## 8. Decisions frozen from user answers (2026-08-15)
 
-See the ask prompt accompanying this plan: API scope confirmation, article content
-scope, mark-as-read semantics, star interaction, offline caching scope, settings
-scope. Answers are recorded in the conversation and frozen into this plan before
-phase 1.
+- API scope: **GReader API only** (no Fever).
+- Article scope: **headings + summary detail** (title, feed, time, ~200 chars stripped summary).
+- Mark-read: **auto on open**, gated by two settings toggles — "Mark read on open
+  (timeline)" and "Mark read on open (detail)" — both default ON; with both off the
+  user can star articles while leaving them unread.
+- Star: **long-press SELECT in the timeline** + **toggle in the detail card**.
+- Offline: **live-only**, feed tree + badges cached in watch flash.
+- Settings scope: FreshRSS URL, username, API password + dark/light theme, accent
+  color, touch toggle, the two mark-read toggles.
 
 ## 9. Items to verify during implementation
 
