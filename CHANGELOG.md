@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.24
+
+- **Long headings fully readable**: the heading's last line was never drawn
+  — the highlight engine's y-limit guard dropped it for every multi-line
+  title (a 1-line title rendered nothing at all, only feed·time). The guard
+  now allows the full heading; the feed·time line stays clear.
+- **Full summaries load on the 64 KB class (basalt/diorite/chalk)**: the app
+  heap (~9.3 KB) could not fit the 4095-byte summary buffer plus the grown
+  run table, so malloc failed silently and long articles stayed 80-char
+  previews. The app_message buffers shrink to 2048/512 (phone chunks are
+  capped at 1500 bytes to fit), the assembly cap is 2048 there, and the full
+  text now loads and scrolls as one unit. emery/gabbro keep 4095/4096.
+- **Headings up to 96 chars** on the Time 2 class (was 80); the 64 KB class
+  keeps 80 to protect the heap.
+- **Summary reliability**: every chunk now carries the article id (a stale
+  chunk can no longer mix into the next article's buffer), a dropped chunk
+  retries twice then finalizes, and the phone caches its auth token (no
+  per-fetch ClientLogin round trip racing the 8 s watchdog).
+- **Edge hardening**: the transition watchdog unschedules the wedged
+  animations before the next transition destroys their layers; regressing
+  below a ring drop during a prefetch rebuilds the reader page instead of
+  showing a blank screen.
+
 ## 0.3.23
 
 - **Hold DOWN/UP = fast scroll**: UP/DOWN are now repeating clicks — a

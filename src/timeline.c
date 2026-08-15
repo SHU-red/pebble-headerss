@@ -42,7 +42,17 @@
 // Full-summary heap buffer: one buffer for the whole reader, never
 // per-article. malloc'd when the first chunk of a fetch arrives, freed on
 // article change / stream close / new fetch start.
+// The 64 KB-class app heap is tiny (app bank 65536 − ~56 KB static image =
+// ~9.5 KB, ~2.3 KB free with the reader open): a 4095-byte buffer plus the
+// heap-grown run table cannot fit, so malloc() failed silently and the full
+// summary never assembled (the watchdog kept the preview). Cap the assembly
+// at 2048 bytes there — the common case (up to ~120 runs, no highlight
+// blow-up) fits with the run table. emery/gabbro (128 KB banks) keep 4095.
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
 #define FULL_SUMMARY_CAP 4095   // max assembled bytes (cap)
+#else
+#define FULL_SUMMARY_CAP 2048
+#endif
 #define FULL_SUMMARY_BUF (FULL_SUMMARY_CAP + 1) // + NUL
 #define FULL_HINT_H 16          // "Loading full text..." line height
 
@@ -1097,7 +1107,12 @@ static void full_summary_revert_to_preview(void) {
 //! shallow stack only: no snprintf/strtoll/strstr; the chunk text lives in
 //! the inbox buffer and is copied here). Assembles into the one heap buffer;
 //! on the final chunk the full text replaces the preview in the body.
-void timeline_full_summary_chunk(const char *text, bool last) {
+//! `id` is the article id the phone put on the chunk ("" when absent):
+//! chunks are attributed by id so a stale chunk of the PREVIOUS article
+//! still in the BLE pipe when the reader advanced cannot pollute the new
+//! article's buffer (the positional s_full_idx==s_idx guard alone passes
+//! once the new fetch reset s_full_idx to the new index).
+void timeline_full_summary_chunk(const char *text, bool last, const char *id) {
   if (!text) {
     return;
   }
@@ -1105,11 +1120,14 @@ void timeline_full_summary_chunk(const char *text, bool last) {
 
   // Chunks of a fetch the reader has left: ignore. A non-empty stream
   // arriving AFTER a completed buffer is the previous fetch's tail racing
-  // past an article change (proto sends no id, so the attribution is by
-  // position): restart the assembly so the real stream wins, then fall
-  // through to assemble this chunk.
+  // past an article change: restart the assembly so the real stream wins,
+  // then fall through to assemble this chunk.
   if (s_full_idx != s_idx) {
     return;
+  }
+  if (id && id[0] && (s_idx < 0 || s_idx >= s_count ||
+                      strcmp(id, s_articles[s_idx].id) != 0)) {
+    return; // a chunk for a different article (stale pipe): drop it
   }
   if (s_full_done) {
     if (tlen == 0) {
@@ -1208,8 +1226,12 @@ static void header_update(Layer *layer, GContext *ctx) {
   graphics_draw_text(ctx, meta, fonts_get_system_font(FONT_KEY_GOTHIC_14),
                      GRect(4, b.size.h - 18, b.size.w - SIDEBAR_W - 8, 16),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  // The heading is never clamped (max_lines=0), so the y_limit only guards
+  // the meta line below. The LAST line's bottom is 2 + head_layout.height =
+  // b.size.h - 16; the old limit (b.size.h - 20) sat above it and dropped
+  // the last line of every heading (a 1-line title never rendered at all).
   hl_draw(ctx, a->title, &p->head_layout, 4, 2, heading_font, heading_font,
-          GColorBlack, HL_ALARM_COLOR, (int16_t)(b.size.h - 20));
+          GColorBlack, HL_ALARM_COLOR, (int16_t)(b.size.h - 16));
 }
 
 //! Build one article page (header + scrollable summary) into a fresh set of
@@ -1317,6 +1339,21 @@ static void transition_watchdog_cb(void *data) {
   s_transition_watchdog = NULL;
   if (!s_advancing) {
     return;
+  }
+  // A wedged transition left its animations live on the page roots; the
+  // next transition destroys those layers (page_destroy). Unschedule both
+  // animations first — NULL the pointers so their stopped handlers no-op
+  // (they fire with finished=false and would otherwise compare against the
+  // cleared s_anim_a).
+  if (s_anim_a) {
+    Animation *old = s_anim_a;
+    s_anim_a = NULL;
+    animation_unschedule(old);
+  }
+  if (s_anim_b) {
+    Animation *old = s_anim_b;
+    s_anim_b = NULL;
+    animation_unschedule(old);
   }
   s_advancing = false;
   s_advance_guard = false;
@@ -1895,6 +1932,7 @@ void timeline_page_begin(int32_t n) {
               (size_t)(s_count - drop) * sizeof(Article));
       s_count -= drop;
       s_idx -= drop;
+      bool regressed_below_drop = (s_idx < 0);
       if (s_idx < 0) {
         s_idx = 0;
       }
@@ -1912,6 +1950,13 @@ void timeline_page_begin(int32_t n) {
         if (s_full_idx < 0) {
           full_summary_reset(); // the buffered article was dropped
         }
+      }
+      if (regressed_below_drop && s_count > 0 && cur_page()->body) {
+        // The reader had gone back below the drop line when the prefetched
+        // page arrived, so its article was evicted and the pages went inert
+        // (blank screen). Rebuild the current page on the new head so the
+        // reader shows a real article instead of nothing.
+        page_build(cur_page(), s_idx);
       }
     }
   }

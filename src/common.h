@@ -140,7 +140,15 @@ void mark_mode_set(int mode);
 //! separate detail view; the list IS the reader).
 typedef struct {
   char id[24];       // decimal microsecond id, kept as a string
-  char title[80];    // full article title (the header renders it multi-line, no cap)
+  // Full article title (the header renders it multi-line, no cap). The JS
+  // sends up to 96 chars; the 64 KB-class RAM budget keeps the ring slots at
+  // 80 (the watch truncates what the phone sent — >80-char titles are cut
+  // there, fully shown on emery/gabbro).
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+  char title[96];
+#else
+  char title[80];
+#endif
   char feed[24];     // feed display name
   char feed_id[16];  // "feed/N"
   char summary[81];  // 80-char preview; full text is fetched on demand

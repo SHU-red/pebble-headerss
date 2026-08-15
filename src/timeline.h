@@ -32,8 +32,11 @@ void timeline_highlight_words_changed(void);
 //! copy `text` into its own heap buffer before returning. `last` marks the
 //! final chunk; once it arrives the assembled full text replaces the
 //! 140-char preview in the scrollable body. A ("", true) call (SummaryLast
-//! alone) closes an empty/errored fetch and keeps the preview. No-op when
-//! no reader is open or the chunks are stale (the reader moved on).
-void timeline_full_summary_chunk(const char *text, bool last);
+//! alone) closes an empty/errored fetch and keeps the preview. `id` is the
+//! article id the phone put on the chunk ("" when absent): a chunk whose id
+//! does not match the settled article is dropped (stale pipe protection).
+//! No-op when no reader is open or the chunks are stale (the reader moved
+//! on).
+void timeline_full_summary_chunk(const char *text, bool last, const char *id);
 
 #endif

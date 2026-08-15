@@ -400,8 +400,32 @@ function sendItemCont(cont, generation) {
 // bytes, keeping each message inside the watch's 4096 B inbound buffer),
 // split at a whitespace boundary when one is available. Splits are allowed
 // to be UTF-8-unsafe — the watch stores raw bytes.
-var SUMMARY_CHUNK_MAX_CHARS = 3000;
-var SUMMARY_CHUNK_MAX_BYTES = 3800;
+// Chunks must fit the watch's app_message inbox WITH the ItemId tuple and
+// message headers. The 64 KB class opens a 2048 B inbox (see proto.c) so
+// chunks are capped at 1400 chars / 1500 bytes; emery/gabbro open 4096 B
+// and can take bigger chunks (fewer round trips for long texts).
+var SUMMARY_CHUNK_MAX_CHARS = 1400;
+var SUMMARY_CHUNK_MAX_BYTES = 1500;
+
+/**
+ * Per-platform summary chunk limits (the 64 KB class has a 2048 B inbox,
+ * emery/gabbro a 4096 B one — see proto.c app_message_open). Falls back to
+ * the conservative small limits when the platform is unknown.
+ * @return {{chars: number, bytes: number}}
+ */
+function platformSummaryLimits() {
+  var platform = '';
+  try {
+    var info = Pebble.getActiveWatchInfo();
+    platform = (info && info.platform) || '';
+  } catch (e) {
+    platform = '';
+  }
+  if (platform === 'emery' || platform === 'gabbro') {
+    return { chars: 3000, bytes: 3800 };
+  }
+  return { chars: 1400, bytes: 1500 };
+}
 
 /**
  * Split a full summary into wire-sized chunks. Each chunk ends at the last
@@ -410,7 +434,8 @@ var SUMMARY_CHUNK_MAX_BYTES = 3800;
  * @param {string} text
  * @return {Array<string>} at least one entry ([''] for empty text)
  */
-function splitSummary(text) {
+function splitSummary(text, limits) {
+  limits = limits || { chars: SUMMARY_CHUNK_MAX_CHARS, bytes: SUMMARY_CHUNK_MAX_BYTES };
   var s = String(text || '');
   var chunks = [];
   var len = s.length;
@@ -434,8 +459,8 @@ function splitSummary(text) {
     } else {
       byteLen = 3;
     }
-    if (chars + 1 > SUMMARY_CHUNK_MAX_CHARS ||
-        bytes + byteLen > SUMMARY_CHUNK_MAX_BYTES) {
+    if (chars + 1 > limits.chars ||
+        bytes + byteLen > limits.bytes) {
       var end = (lastSpace > start) ? lastSpace : i;
       if (end <= start) {
         end = i; // hard split at the byte/char bound
@@ -467,17 +492,23 @@ function splitSummary(text) {
  * Send one FullSummary chunk, then the next, chained on ack; after the last
  * chunk a {SummaryLast: 1} finalizes the article on the watch. An empty
  * chunk list (empty or failed summary) sends the bare SummaryLast.
+ * Every message carries the article id so the watch can drop chunks of a
+ * fetch the reader has left (stale-pipe protection). A failed chunk send is
+ * retried twice, then the chain finalizes (SummaryLast) so the watch never
+ * waits out its 8 s watchdog with the "Loading full text..." hint up.
  * @param {Array<string>} chunks
  * @param {number} index
  * @param {number} generation - summary generation; a stale chain aborts
+ * @param {string} id - article id (decimal µs)
+ * @param {number} retries - consecutive send failures on this chunk
  */
-function sendSummaryChunks(chunks, index, generation) {
+function sendSummaryChunks(chunks, index, generation, id, retries) {
+  retries = retries || 0;
   if (generation !== summaryGeneration) {
     return;
   }
   if (index >= chunks.length) {
-    var done = {};
-    done.SummaryLast = 1;
+    var done = { ItemId: id, SummaryLast: 1 };
     Pebble.sendAppMessage(done, function () {
       console.log('summary: sent SummaryLast');
     }, function (err) {
@@ -485,12 +516,21 @@ function sendSummaryChunks(chunks, index, generation) {
     });
     return;
   }
-  var dict = {};
-  dict.FullSummary = chunks[index];
+  var dict = { ItemId: id, FullSummary: chunks[index] };
   Pebble.sendAppMessage(dict, function () {
-    sendSummaryChunks(chunks, index + 1, generation);
+    sendSummaryChunks(chunks, index + 1, generation, id, 0);
   }, function (err) {
-    console.log('summary: failed to send chunk ' + index + ': ' + JSON.stringify(err));
+    if (retries < 2) {
+      console.log('summary: chunk ' + index + ' send failed, retrying');
+      setTimeout(function () {
+        if (generation === summaryGeneration) {
+          sendSummaryChunks(chunks, index, generation, id, retries + 1);
+        }
+      }, 150);
+    } else {
+      console.log('summary: chunk ' + index + ' failed after retries, finalizing');
+      Pebble.sendAppMessage({ ItemId: id, SummaryLast: 1 }, function () {}, function () {});
+    }
   });
 }
 
@@ -513,20 +553,19 @@ function summaryFlow(id) {
     }
     if (err) {
       sendResult(err.code, err.text);
-      var done = {};
-      done.SummaryLast = 1;
-      Pebble.sendAppMessage(done, function () {
+      Pebble.sendAppMessage({ ItemId: id, SummaryLast: 1 }, function () {
         // best effort — unblocks the watch's "Loading full text..."
       }, function (e2) {
         console.log('summary: failed to send error SummaryLast: ' + JSON.stringify(e2));
       });
       return;
     }
-    var chunks = splitSummary(text);
+    var limits = platformSummaryLimits();
+    var chunks = splitSummary(text, limits);
     if (chunks.length === 1 && chunks[0] === '') {
       chunks = []; // empty summary: bare SummaryLast, no FullSummary chunk
     }
-    sendSummaryChunks(chunks, 0, generation);
+    sendSummaryChunks(chunks, 0, generation, id, 0);
   });
 }
 

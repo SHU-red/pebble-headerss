@@ -151,12 +151,23 @@ function stripHtml(html) {
  * @param {string} apiPass   FreshRSS API password (separate from login password)
  * @param {Object} [opts]    {request: function() -> XHR-like} for testing
  */
+// Auth token cache, keyed by server+user. app.js builds a fresh client per
+// flow, so a per-client token made every flow re-run ClientLogin — with a
+// slow/stale connection the login+fetch pair can exceed the watch's 8 s
+// full-summary watchdog. Caching the token makes ensureAuth a no-op after
+// the first login of a session; a 401 clears it and re-logs in.
+var AUTH_CACHE = {};
+
+function authCacheKey(base, user) {
+  return base + '\u0001' + user;
+}
+
 function createClient(baseUrl, username, apiPass, opts) {
   opts = opts || {};
   var base = normalizeBaseUrl(baseUrl);
   var user = String(username || '');
   var pass = String(apiPass || '');
-  var token = null;
+  var token = AUTH_CACHE[authCacheKey(base, user)] || null;
   var requestFactory = opts.request || function () {
     return new XMLHttpRequest();
   };
@@ -175,6 +186,7 @@ function createClient(baseUrl, username, apiPass, opts) {
         var m = String(xhr.responseText || '').match(/Auth=([^\r\n]+)/);
         if (m && m[1]) {
           token = m[1];
+          AUTH_CACHE[authCacheKey(base, user)] = token;
           cb(null, token);
         } else {
           cb(makeError(1, 'Login failed — check API password'));
@@ -232,6 +244,7 @@ function createClient(baseUrl, username, apiPass, opts) {
     xhr.onload = function () {
       if (xhr.status === 401 && !retried) {
         token = null;
+        AUTH_CACHE[authCacheKey(base, user)] = null;
         login(function (loginErr) {
           if (loginErr) {
             cb(loginErr);
@@ -263,7 +276,7 @@ function createClient(baseUrl, username, apiPass, opts) {
   function mapItem(item) {
     return {
       id: String(item.timestampUsec),
-      title: String(item.title || '(no title)').slice(0, 80),
+      title: String(item.title || '(no title)').slice(0, 96),
       feed: (item.origin && item.origin.title) || '',
       feedId: (item.origin && item.origin.streamId) || '',
       summary: stripHtml(item.summary && item.summary.content || '').slice(0, 80),

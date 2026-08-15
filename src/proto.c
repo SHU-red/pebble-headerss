@@ -355,19 +355,23 @@ void proto_handle_inbox(DictionaryIterator *iter) {
   }
 
   // Full summary stream (fetch-by-id reply): the phone sends FullSummary
-  // text chunks with SummaryLast=1 on the final chunk. The chunk is handed
-  // to the timeline reader directly, NOT copied — the inbox buffer stays
-  // alive for the whole callback and the reader copies into its own heap
-  // buffer. Shallow-stack diet: no copy_str/snprintf on this path.
+  // text chunks (with the article's ItemId for attribution) and SummaryLast=1
+  // on the final chunk. The chunk is handed to the timeline reader directly,
+  // NOT copied — the inbox buffer stays alive for the whole callback and the
+  // reader copies into its own heap buffer. Shallow-stack diet: no
+  // copy_str/snprintf on this path.
   if ((t = dict_find(iter, MESSAGE_KEY_FullSummary))) {
     bool last = dict_find(iter, MESSAGE_KEY_SummaryLast) != NULL;
-    timeline_full_summary_chunk(t->value->cstring, last);
+    Tuple *id_t = dict_find(iter, MESSAGE_KEY_ItemId);
+    timeline_full_summary_chunk(t->value->cstring, last,
+                                id_t ? id_t->value->cstring : "");
     return;
   }
   // SummaryLast alone (finalize an empty/errored fetch): close the reader's
   // buffer so the preview/partial text settles.
   if ((t = dict_find(iter, MESSAGE_KEY_SummaryLast))) {
-    timeline_full_summary_chunk("", true);
+    Tuple *id_t = dict_find(iter, MESSAGE_KEY_ItemId);
+    timeline_full_summary_chunk("", true, id_t ? id_t->value->cstring : "");
     return;
   }
 
@@ -479,11 +483,25 @@ static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason,
   }
 }
 
-//! Register handlers and open the buffers (launcher-verified sizes).
+//! Register handlers and open the buffers.
+//! The 64 KB-class app heap (bank − ~56 KB static ≈ 9.5 KB) cannot hold the
+//! old 4096/1024 buffers plus the full-summary assembly (FULL_SUMMARY_CAP in
+//! timeline.c): inbox 2048 fits the largest message (a 1500-byte summary
+//! chunk + ItemId + headers) and outbox 512 fits the largest send (the
+//! ~420 B mark-read batch), freeing ~2.5 KB for the summary. emery/gabbro
+//! (128 KB banks) keep the roomier buffers.
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+#define APP_MESSAGE_INBOX 4096
+#define APP_MESSAGE_OUTBOX 1024
+#else
+#define APP_MESSAGE_INBOX 2048
+#define APP_MESSAGE_OUTBOX 512
+#endif
+
 void proto_init(void) {
   app_message_register_inbox_received(inbox_received);
   app_message_register_inbox_dropped(inbox_dropped);
   app_message_register_outbox_sent(outbox_sent);
   app_message_register_outbox_failed(outbox_failed);
-  app_message_open(4096, 1024);
+  app_message_open(APP_MESSAGE_INBOX, APP_MESSAGE_OUTBOX);
 }
