@@ -122,6 +122,10 @@ static void dialog_confirm_select(ClickRecognizerRef rec, void *ctx) {
     s_dialog_confirm = false;
     dialog_show_working("Marking read");
     proto_mark_all_read(stream);
+    // Optimistic badge update: the counts hit 0 immediately (the phone
+    // syncs the server in the background; a later refresh re-verifies).
+    tree_mark_all_read(stream);
+    ui_tree_updated();
     return;
   }
   if (!s_dialog_confirm) {
@@ -1156,8 +1160,8 @@ static void ctx_window_load(Window *window) {
   GRect bounds = layer_get_bounds(root);
   window_set_background_color(window, theme_bg());
 
-  // Bottom-anchored two-row sheet.
-  GRect menu_bounds = GRect(0, bounds.size.h - 96, bounds.size.w, 96);
+  // Full-screen menu, like every other menu in the app.
+  GRect menu_bounds = GRect(0, 0, bounds.size.w, bounds.size.h);
   s_ctx_menu = menu_layer_create(menu_bounds);
   menu_layer_set_callbacks(s_ctx_menu, NULL, (MenuLayerCallbacks){
     .get_num_rows = ctx_get_num_rows,

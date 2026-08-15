@@ -36,6 +36,8 @@ void tree_compute_unread(void);
 void tree_feed_decrement(const char *feed_id);
 //! Optimistic Starred-badge adjustment (star on: +1, off: -1, floored 0).
 void tree_starred_adjust(int delta);
+//! Optimistic mark-all-read: zero the stream (+ subtree/ancestors) locally.
+void tree_mark_all_read(const char *stream);
 
 //! Row mapping for the root menu: specials + top-level folders + top-level
 //! feeds, in tree_sort() order (specials pinned, folders, then feeds sorted

@@ -126,6 +126,86 @@ void tree_starred_adjust(int delta) {
   n->unread = v < 0 ? 0 : v;
 }
 
+//! Walk a feed's ancestor chain (folders) plus the reading-list special,
+//! decrementing each by `dec` (floored at 0).
+static void tree_dec_ancestors(const char *pid, int32_t dec) {
+  int guard = 0;
+  while (pid && pid[0] && guard++ < MAX_FEED_NODES) {
+    FeedNode *p = find_node(pid);
+    if (!p) {
+      break;
+    }
+    if (p->unread > 0) {
+      p->unread -= dec;
+      if (p->unread < 0) {
+        p->unread = 0;
+      }
+    }
+    pid = p->parent;
+  }
+  FeedNode *all = find_node(READING_LIST_ID);
+  if (all && all->unread > 0) {
+    all->unread -= dec;
+    if (all->unread < 0) {
+      all->unread = 0;
+    }
+  }
+}
+
+//! Is `child` (a feed's parent chain) inside the folder `folder`?
+static bool tree_in_folder(const char *pid, const char *folder) {
+  int guard = 0;
+  while (pid && pid[0] && guard++ < MAX_FEED_NODES) {
+    if (strcmp(pid, folder) == 0) {
+      return true;
+    }
+    const FeedNode *p = find_node(pid);
+    if (!p) {
+      break;
+    }
+    pid = p->parent;
+  }
+  return false;
+}
+
+//! Optimistic mark-all-read: zero the target stream locally (the whole
+//! reading list, one feed, or a folder + its subtree) and decrement the
+//! ancestor badges, so the menus hit 0 IMMEDIATELY. The phone syncs the
+//! server in the background; a later refresh re-verifies. The Starred
+//! counter is untouched (stars are not an unread state).
+void tree_mark_all_read(const char *stream) {
+  if (!stream || !stream[0]) {
+    // Whole reading list: zero everything except the Starred counter.
+    for (int i = 0; i < s_node_count; i++) {
+      FeedNode *n = &s_nodes[i];
+      if (n->kind != 0 || strcmp(n->id, STARRED_ID) != 0) {
+        n->unread = 0;
+      }
+    }
+    return;
+  }
+  FeedNode *n = find_node(stream);
+  if (!n) {
+    return;
+  }
+  if (n->kind == 2) {
+    // One feed: its folders + the reading list lose the feed's count.
+    tree_dec_ancestors(n->parent, n->unread);
+    n->unread = 0;
+  } else if (n->kind == 1) {
+    // A folder: zero every feed inside it, then its own ancestors lose the
+    // folder's whole count.
+    for (int i = 0; i < s_node_count; i++) {
+      FeedNode *f = &s_nodes[i];
+      if (f->kind == 2 && tree_in_folder(f->parent, n->id)) {
+        f->unread = 0;
+      }
+    }
+    tree_dec_ancestors(n->parent, n->unread);
+    n->unread = 0;
+  }
+}
+
 //! Optimistic badge update after a mark-read batch: the feed's own counter
 //! and every ancestor (folders + the reading-list special), floored at 0.
 void tree_feed_decrement(const char *feed_id) {

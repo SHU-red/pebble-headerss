@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.5
+
+- **Context menu is full screen** (long-press SELECT on a feed/folder) —
+  it was a two-row bottom sheet, now it looks like every other menu
+- **Mark all read updates the badges immediately**: the counts zero
+  locally the moment the confirm is pressed (whole list, one feed, or a
+  folder + its subtree; ancestor badges decrement; the Starred counter is
+  untouched), instead of waiting for a re-fetch. The phone syncs the
+  server in the background and a later Refresh re-verifies.
+
 ## 0.3.4 — navigation
 
 - The accent right spine is gone from every menu (root, folder, sub-menu,
