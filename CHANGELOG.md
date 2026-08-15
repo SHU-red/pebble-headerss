@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.3
+
+- **Startup crash — menu animation / dialog interplay removed.** Crash
+  forensics (faulting PC executed inside a rodata string literal — corrupted
+  control flow; constant RAM LR = PebbleOS dispatch) pointed at two startup
+  hazards:
+  1. `menu_layer_set_selected_index(..., animated=true)` at window load: the
+     tree arrives immediately after and `reload_data()` rebuilds the rows
+     while the selection scroll-animation is still running — the menu's
+     animation callback fires on the rebuilt menu (use-after-free →
+     corrupted callback pointer → jump into rodata). Selection is now
+     non-animated at load.
+  2. The startup working dialog (shown when the tree cache is invalid —
+     e.g. right after the 0.2.0 FeedNode cache-format change, which
+     self-perpetuated because the crash prevented the cache from ever
+     saving): the initial fetch no longer opens a dialog; the menu's empty
+     state is the feedback and the cached tree still renders instantly
+     (`tree_load_cache()` kept). Explicit user actions (Refresh,
+     Connection, Mark all read) keep their dialogs.
+- Startup step markers added (`startup: tree requested / result / count /
+  menu reload`) so any remaining failure pinpoints its step in the log.
+
 ## 0.2.2
 
 - **Startup crash fixed (root cause)**: basalt/chalk/diorite run on a 2 KB

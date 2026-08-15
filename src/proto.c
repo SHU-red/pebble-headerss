@@ -96,6 +96,8 @@ void proto_request_tree(void) {
   }
   if (res != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchTree (%d)", (int)res);
+  } else {
+    APP_LOG(APP_LOG_LEVEL_INFO, "startup: tree requested");
   }
 }
 
@@ -193,6 +195,7 @@ void proto_handle_inbox(DictionaryIterator *iter) {
   // not outlive the callback handling.
   if ((t = dict_find(iter, MESSAGE_KEY_ResultCode))) {
     int32_t code = t->value->int32;
+    APP_LOG(APP_LOG_LEVEL_INFO, "startup: result %ld", (long)code);
     char text_buf[96];
     Tuple *text_t = dict_find(iter, MESSAGE_KEY_ResultText);
     snprintf(text_buf, sizeof(text_buf), "%s",
@@ -204,6 +207,8 @@ void proto_handle_inbox(DictionaryIterator *iter) {
   // Tree stream: FeedCount announces the node count, then one message per
   // node carries FeedType + FeedId + FeedName + FeedUnread + FeedParent.
   if ((t = dict_find(iter, MESSAGE_KEY_FeedCount))) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "startup: tree count %ld",
+            (long)t->value->int32);
     tree_begin_collect(t->value->int32);
     return;
   }

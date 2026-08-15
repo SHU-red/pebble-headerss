@@ -319,6 +319,7 @@ void ui_result(int code, const char *text) {
 //! A fresh tree arrived: refresh the visible tree menus and hide any
 //! working dialog ("Loading..." / "Refreshing...").
 void ui_tree_updated(void) {
+  APP_LOG(APP_LOG_LEVEL_INFO, "startup: menu reload");
   if (s_main_menu) {
     menu_layer_reload_data(s_main_menu);
   }
@@ -652,9 +653,13 @@ static void main_window_load(Window *window) {
   menu_layer_set_normal_colors(s_main_menu, theme_bg(), theme_fg());
   menu_layer_set_highlight_colors(s_main_menu, s_accent, GColorBlack);
   layer_add_child(root, menu_layer_get_layer(s_main_menu));
-  // Always start on the first tree row.
+  // Always start on the first tree row. NOT animated: the tree arrives
+  // right after load and reload_data() rebuilds the rows while a scroll
+  // animation would still be running — PebbleOS's menu animation callback
+  // then fires on the rebuilt menu (use-after-free -> corrupted callback
+  // pointer -> the startup crash).
   MenuIndex first = { .section = 0, .row = 1 };
-  menu_layer_set_selected_index(s_main_menu, first, MenuRowAlignCenter, true);
+  menu_layer_set_selected_index(s_main_menu, first, MenuRowAlignCenter, false);
 }
 
 static void main_window_unload(Window *window) {
@@ -1059,14 +1064,14 @@ static void init(void) {
 
   push_main_window();
 
-  // Cached tree = instant start; refresh in the background. Otherwise a
-  // working dialog covers the wait for the first real tree.
-  if (tree_load_cache() > 0) {
-    proto_request_tree();
-  } else {
-    dialog_show_working("Loading");
-    proto_request_tree();
-  }
+  // Cached tree = instant start; refresh in the background. NEVER show the
+  // working dialog here: on a first run (or after a cache-format change)
+  // the fetch races the dialog's push/pop against the menu render — that
+  // interplay crashed at startup. The menu's empty state is the feedback;
+  // explicit user actions (Refresh, Connection, Mark all read) still use
+  // the dialog.
+  tree_load_cache();
+  proto_request_tree();
 }
 
 static void deinit(void) {
