@@ -1552,7 +1552,7 @@ static void timeline_window_load(Window *window) {
   text_layer_set_text_alignment(s_top_text, GTextAlignmentLeft);
   text_layer_set_overflow_mode(s_top_text, GTextOverflowModeTrailingEllipsis);
   text_layer_set_background_color(s_top_text, GColorClear);
-  text_layer_set_text_color(s_top_text, s_accent);
+  text_layer_set_text_color(s_top_text, GColorWhite); // matches the divider
   text_layer_set_text(s_top_text, s_title);
   layer_add_child(root, text_layer_get_layer(s_top_text));
 
@@ -1947,7 +1947,7 @@ void timeline_apply_settings(void) {
     layer_mark_dirty(s_status_check); // accent check
   }
   if (s_top_text) {
-    text_layer_set_text_color(s_top_text, s_accent);
+    text_layer_set_text_color(s_top_text, GColorWhite); // matches the divider
   }
   if (s_top_bar) {
     layer_mark_dirty(s_top_bar);
