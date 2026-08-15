@@ -1596,8 +1596,11 @@ static void timeline_back_click(ClickRecognizerRef rec, void *ctx) {
 //! scroll_layer_set_click_config_onto_window) so the reader controls the
 //! advance semantics; scrolling delegates to the scroll layer's handlers.
 static void timeline_click_config_provider(void *ctx) {
-  window_single_click_subscribe(BUTTON_ID_UP, timeline_up_click);
-  window_single_click_subscribe(BUTTON_ID_DOWN, timeline_down_click);
+  // Repeating clicks: a single press scrolls one page; HOLDING UP/DOWN
+  // repeats every 100 ms, so a very long article (up to ~2800 px of text)
+  // scrolls through in a couple of seconds instead of ~18 presses.
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, timeline_up_click);
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, timeline_down_click);
   window_single_click_subscribe(BUTTON_ID_SELECT, timeline_select_click);
   window_long_click_subscribe(BUTTON_ID_SELECT, 500, timeline_star_long_click, NULL);
   window_single_click_subscribe(BUTTON_ID_BACK, timeline_back_click);

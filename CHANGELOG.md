@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.23
+
+- **Hold DOWN/UP = fast scroll**: UP/DOWN are now repeating clicks — a
+  single press scrolls one page, holding repeats every 100 ms. A very long
+  article (the 4095-char full-text cap can reach ~2800 px of text, ~18
+  presses) scrolls through in a couple of seconds of holding, and holding
+  past the end auto-advances for fast reading.
+
 ## 0.3.22
 
 - **Starred stream never unread-filters**: the "Unread only" toggle was
