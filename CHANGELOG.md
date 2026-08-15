@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.19
+
+- **No fetch-hold on DOWN**: pressing DOWN while the full summary is still
+  loading proceeds immediately (fast readers can skip ahead); the fetch for
+  the skipped article is dropped and the next article's settles normally
+- **Any overflow scrolls**: the ≤1-line "fits" heuristic is gone — if the
+  article's text exceeds the viewport by even a few pixels (a cut last
+  line), DOWN scrolls first so the bottom of the summary is always revealed
+  before the next article appears; content that fits advances on one press
+
 ## 0.3.18
 
 - **One press per article again**: the scroll air (0.3.16) made every

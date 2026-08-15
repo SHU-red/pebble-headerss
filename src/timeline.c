@@ -1462,10 +1462,11 @@ static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
   }
 }
 
-//! DOWN scrolls the article by one viewport (page-down); at the true bottom
-//! of the text it advances to the next article. While the full summary is
-//! still loading the advance is blocked (the short preview would skip the
-//! article); scrolling is a no-op on the preview.
+//! DOWN scrolls the article by ~3/4 viewport; at the true bottom of the
+//! text it advances to the next article. No fetch-hold: pressing DOWN while
+//! the full summary is still loading proceeds anyway (fast reading). Any
+//! overflow — even a few pixels of a cut last line — scrolls first, so the
+//! bottom of the summary is always revealed before the next article.
 static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing || s_advance_guard) {
     APP_LOG(APP_LOG_LEVEL_INFO, "nav: DOWN ignored (count=%ld adv=%d guard=%d)",
@@ -1480,25 +1481,10 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   // content origin: 0 at the top, NEGATIVE when scrolled, frame.h-content.h
   // at the very bottom. "At the bottom" is offset.y <= frame.h-content.h.
   bool at_bottom = (offset.y <= frame.size.h - content.h + 2);
-  bool fetching_here = (s_full_idx == s_idx && s_full_fetching && !s_full_done);
   APP_LOG(APP_LOG_LEVEL_INFO,
-          "nav: DOWN off=%d frame=%d cont=%d bottom=%d fetch=%d",
-          offset.y, frame.size.h, content.h, (int)at_bottom,
-          (int)fetching_here);
-  if (fetching_here) {
-    return; // hold: the full text is on its way; do not skip the article
-  }
+          "nav: DOWN off=%d frame=%d cont=%d bottom=%d",
+          offset.y, frame.size.h, content.h, (int)at_bottom);
   if (at_bottom) {
-    maybe_advance();
-    return;
-  }
-  // Articles whose text fits the viewport (or grazes it by at most ~1 line)
-  // advance on ONE press — no pointless micro-scroll through empty space.
-  // Genuinely long text keeps the visible page-scroll below.
-  int32_t overflow = content.h - frame.size.h;
-  if (overflow <= 24) {
-    APP_LOG(APP_LOG_LEVEL_INFO, "nav: fits (overflow %d), advance",
-            (int)overflow);
     maybe_advance();
     return;
   }
