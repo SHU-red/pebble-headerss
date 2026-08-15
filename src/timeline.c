@@ -117,12 +117,18 @@ typedef struct {
   uint8_t style; // 0 = base font, 1 = highlight font
 } HlRun;
 
-//! Cached layout: a wrapped, run-annotated text.
+//! Cached layout: a wrapped, run-annotated text. The run table is a small
+//! static array (covers previews and headings); when a FULL summary needs
+//! more runs the layout grows a heap array on demand (freed on re-layout /
+//! teardown), so long texts are never silently truncated.
 typedef struct {
   int16_t height; // total layout height (px), a multiple of line_h
   int16_t line_h; // single text line height (px)
-  uint8_t n;      // runs in use
-  HlRun runs[HL_RUNS_MAX];
+  uint16_t n;     // runs in use (a full summary can need hundreds)
+  uint16_t cap;   // current run capacity (runs[])
+  bool dyn;       // runs[] is heap-allocated
+  HlRun *runs;    // points at static_runs or a heap array
+  HlRun static_runs[HL_RUNS_MAX];
 } HlLayout;
 
 //! A matched span of the source text (byte range).
@@ -535,7 +541,7 @@ static void hl_add_ellipsis(HlLayout *lo, const char *text, GFont base_font,
   int last = lo->n - 1;
   if (last < 0 || lo->runs[last].y != line_y) {
     // The last line is empty: a lone ellipsis marks the cut.
-    if (lo->n < HL_RUNS_MAX) {
+    if (lo->n < lo->cap) {
       HlRun *r = &lo->runs[lo->n];
       r->x = 0;
       r->y = line_y;
@@ -586,7 +592,7 @@ static void hl_add_ellipsis(HlLayout *lo, const char *text, GFont base_font,
                         : 0;
     k--;
   }
-  if (lo->n < HL_RUNS_MAX) {
+  if (lo->n < lo->cap) {
     uint8_t estyle = (lo->n > 0) ? lo->runs[lo->n - 1].style : 0;
     int16_t ew = hl_measure_text("\xE2\x80\xA6",
                                  estyle ? hl_font : base_font);
@@ -608,6 +614,12 @@ static void hl_build_layout(const HlBuildParams *p) {
   HlLayout *lo = p->out;
   const char *t = p->text;
   size_t tlen = strlen(t);
+  if (lo->dyn) {
+    free(lo->runs);
+  }
+  lo->runs = lo->static_runs;
+  lo->dyn = false;
+  lo->cap = HL_RUNS_MAX;
   lo->n = 0;
   lo->height = 0;
 
@@ -728,7 +740,32 @@ static void hl_build_layout(const HlBuildParams *p) {
         if (cur >= 0) {
           lo->runs[cur].w = cur_w;
         }
-        if (lo->n < HL_RUNS_MAX) {
+        if (lo->n >= lo->cap) {
+          // The static table is full (a full summary needs many more runs
+          // than a preview): grow a heap array on demand. Doubling keeps
+          // the reallocation count low; the memory is freed on re-layout.
+          uint16_t new_cap = (uint16_t)(lo->cap * 2);
+          if (new_cap < 64) {
+            new_cap = 64;
+          }
+          HlRun *arr = malloc((size_t)new_cap * sizeof(HlRun));
+          if (arr) {
+            memcpy(arr, lo->runs, (size_t)lo->n * sizeof(HlRun));
+            if (lo->dyn) {
+              free(lo->runs);
+            }
+            lo->runs = arr;
+            lo->dyn = true;
+            lo->cap = new_cap;
+          } else {
+            cur = -1;
+            cur_w = 0;
+            line_x += gap + sw;
+            have_word = true;
+            continue; // heap exhausted: keep the static truncation
+          }
+        }
+        {
           cur = lo->n;
           HlRun *r = &lo->runs[cur];
           r->x = line_x + gap;
@@ -739,9 +776,6 @@ static void hl_build_layout(const HlBuildParams *p) {
           r->style = sstyle;
           lo->n++;
           cur_w = sw;
-        } else {
-          cur = -1;
-          cur_w = 0;
         }
         line_x += gap + sw;
         have_word = true;
@@ -1183,6 +1217,17 @@ static void page_build(Page *p, int32_t idx) {
 }
 
 static void page_destroy(Page *p) {
+  // Free heap-grown run tables (full summaries) before the layers go.
+  if (p->head_layout.dyn) {
+    free(p->head_layout.runs);
+    p->head_layout.runs = p->head_layout.static_runs;
+    p->head_layout.dyn = false;
+  }
+  if (p->body_layout.dyn) {
+    free(p->body_layout.runs);
+    p->body_layout.runs = p->body_layout.static_runs;
+    p->body_layout.dyn = false;
+  }
   if (p->body) {
     layer_destroy(p->body);
     p->body = NULL;
@@ -1615,6 +1660,19 @@ static void timeline_close(void) {
   full_summary_reset(); // free the assembled full text
   transition_watchdog_cancel();
   proto_flush_now();
+  // Free heap-grown run tables (full-summary layouts) on teardown.
+  for (int i = 0; i < 2; i++) {
+    if (s_pages[i].head_layout.dyn) {
+      free(s_pages[i].head_layout.runs);
+      s_pages[i].head_layout.runs = s_pages[i].head_layout.static_runs;
+      s_pages[i].head_layout.dyn = false;
+    }
+    if (s_pages[i].body_layout.dyn) {
+      free(s_pages[i].body_layout.runs);
+      s_pages[i].body_layout.runs = s_pages[i].body_layout.static_runs;
+      s_pages[i].body_layout.dyn = false;
+    }
+  }
   if (s_anim_a) {
     Animation *old = s_anim_a;
     s_anim_a = NULL;

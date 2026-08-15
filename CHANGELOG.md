@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.13
+
+- **THE full-text cutoff — root cause fixed**: the highlight layout's run
+  table was capped at 24 runs (~8 lines). A full summary needs hundreds of
+  runs; once the table filled, every further token was silently DROPPED —
+  the geometry kept counting (the "text grows" glimpse) but the text was
+  never drawn below the cap (the cutoff) and the scroll range never covered
+  the real content. The run table now grows a heap array on demand
+  (doubling from 24, freed on re-layout/teardown; static 24-run fallback if
+  the heap is exhausted). Full summaries are now laid out and drawn in
+  their entirety — the page scrolls through the real text and DOWN advances
+  only at the actual last word. Run count widened to uint16_t (a full text
+  can exceed 255 runs).
+- No .bss growth (the static table is unchanged; the grown arrays live on
+  the heap).
+
 ## 0.3.12
 
 - **Full-summary fetch reliability**: the FetchSummary request could hit a
