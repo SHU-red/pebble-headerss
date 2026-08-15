@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.17
+
+- **Progress bar reaches the sidebar exactly**: the bar's width is capped
+  at the accent icon area's left edge — at the last article (100%) it spans
+  right up to the sidebar instead of disappearing under it
+- **Star redesigned**: chunkier, wider 26 px star (was narrow 24 px); the
+  active colour is now bright chrome-yellow (was dark orange) — it pops
+  clearly against the accent bar
+
 ## 0.3.16
 
 - **Every article scrolls**: the body now carries ~160 px of scroll air

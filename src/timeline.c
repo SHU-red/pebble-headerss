@@ -29,11 +29,11 @@
 // full-height sidebar ~10 px apart, starting ~8 px from the very top.
 #define SIDEBAR_ICON_GAP 12 // vertical gap between the indicators
 #define SIDEBAR_DISC_D 20   // read/unread disc diameter
-#define SIDEBAR_STAR_H 24   // fav star height
+#define SIDEBAR_STAR_H 26   // fav star height
 #define SIDEBAR_MAG_H 24    // match magnifier glyph height
 // The indicator column is vertically centered beside the physical SELECT
-// button (right edge, mid-screen): total stack = 24+12+20+12+24 = 92 px.
-#define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 92) / 2)
+// button (right edge, mid-screen): total stack = 26+12+20+12+24 = 94 px.
+#define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 94) / 2)
 
 // Highlight alarm color: the highlight M badge and ALL matched words (body
 // and title) share this one color so the connection is obvious.
@@ -186,13 +186,14 @@ static Animation *s_anim_b; // spare page slides in
 static GRect s_from_a, s_to_a, s_from_b, s_to_b;
 static AppTimer *s_transition_watchdog; // failsafe: releases a wedged transition
 
-// Shared draw path: a star (~24 px) — the favourite indicator in the
-// sidebar. Orange when starred, black otherwise.
+// Shared draw path: a chunky star (~26 px) — the favourite indicator in the
+// sidebar. Bright chrome-yellow when starred (pops on the accent bar),
+// black otherwise.
 static const GPathInfo STAR_ICON_INFO = {
   .num_points = 10,
   .points = (GPoint[10]){
-    { 0, -9 }, { 2, -2 }, { 9, -3 }, { 4, 1 }, { 7, 9 },
-    { 0, 5 }, { -7, 9 }, { -4, 1 }, { -9, -3 }, { -2, -2 },
+    { 0, -10 }, { 3, -3 }, { 10, -3 }, { 5, 2 }, { 8, 10 },
+    { 0, 6 }, { -8, 10 }, { -5, 2 }, { -10, -3 }, { -3, -3 },
   },
 };
 
@@ -277,7 +278,16 @@ static void progress_update(Layer *layer, GContext *ctx) {
   if (setting_progress() && s_count > 0) {
     int32_t denom = s_count > s_page_announced ? s_count : s_page_announced;
     if (denom > 0) {
-      int16_t w = (int16_t)((int32_t)(s_idx + 1) * b.size.w / denom);
+      // Cap the bar at the sidebar's left edge: at the last article (100%)
+      // it reaches exactly the accent icon area, never hidden under it.
+      int16_t max_w = (int16_t)(b.size.w - SIDEBAR_W);
+      int16_t w = (int16_t)((int32_t)(s_idx + 1) * max_w / denom);
+      if (w < 0) {
+        w = 0;
+      }
+      if (w > max_w) {
+        w = max_w;
+      }
       if (w > 0) {
         graphics_context_set_fill_color(ctx, s_accent);
         graphics_fill_rect(ctx, GRect(0, 0, w, b.size.h), 0, GCornerNone);
@@ -320,11 +330,12 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
   int16_t cx = b.size.w / 2;
   int16_t y = SIDEBAR_ICON_TOP(s_win_h);
 
-  // 1. Favourite: a star — orange when starred, black otherwise.
+  // 1. Favourite: a star — bright chrome-yellow when starred, black otherwise.
   if (s_star_path) {
     GPoint sc = GPoint(cx, y + SIDEBAR_STAR_H / 2);
     gpath_move_to(s_star_path, sc);
-    graphics_context_set_fill_color(ctx, a->star ? GColorOrange : GColorBlack);
+    graphics_context_set_fill_color(ctx,
+                                    a->star ? GColorChromeYellow : GColorBlack);
     gpath_draw_filled(ctx, s_star_path);
   }
   y += SIDEBAR_STAR_H + SIDEBAR_ICON_GAP;
