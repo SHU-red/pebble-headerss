@@ -26,4 +26,14 @@ void timeline_apply_settings(void);
 //! the words highlight live while reading. No-op when no reader is open.
 void timeline_highlight_words_changed(void);
 
+//! One chunk of the current article's full summary arrived from the phone
+//! (FullSummary reply to a proto_request_summary fetch). Chunks are handed
+//! through straight from the inbox buffer — NOT copied — so this hook must
+//! copy `text` into its own heap buffer before returning. `last` marks the
+//! final chunk; once it arrives the assembled full text replaces the
+//! 140-char preview in the scrollable body. A ("", true) call (SummaryLast
+//! alone) closes an empty/errored fetch and keeps the preview. No-op when
+//! no reader is open or the chunks are stale (the reader moved on).
+void timeline_full_summary_chunk(const char *text, bool last);
+
 #endif

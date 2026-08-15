@@ -19,6 +19,15 @@ void proto_star(const char *id, bool on);
 void proto_mark_all_read(const char *stream);
 void proto_reply_config(void);
 
+//! Ask the phone for an article's full summary (FetchSummary cstr = the
+//! decimal microsecond article id). The reply streams back as FullSummary
+//! chunks, appended by the timeline reader via timeline_full_summary_chunk().
+void proto_request_summary(const char *id);
+
+//! Toggle one article back to unread (MarkUnread cstr = article id); the
+//! phone removes the read tag. Used by the reader's SELECT read toggle.
+void proto_mark_unread(const char *id);
+
 //! Mark-read batching: ids accumulate locally and flush as a CSV MarkRead
 //! payload when the batch fills (MARK_BATCH_MAX) or MARK_FLUSH_MS elapses.
 void proto_mark_push(const char *id);

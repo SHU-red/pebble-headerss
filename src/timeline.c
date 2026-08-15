@@ -9,18 +9,36 @@
 // ---------------------------------------------------------------------------
 // Timeline reading view (see timeline.h). Article headings + summaries
 // stream in from the phone into a ring buffer. The reader is a paged
-// full-screen view: a black top bar (stream name in accent), one article per
-// page — an accent header bar (heading + feed·time), a scrollable summary
-// body — and a thick accent SIDEBAR on the right holding the read/unread dot
-// and the star icon. Page changes slide with a continuous two-page
-// transition (the outgoing page leaves while the incoming one enters — no
-// teleport cut).
+// full-screen view: a 2 px accent progress line along the very top, a black
+// top bar (stream name in accent) below it, one article per page — an accent
+// header bar (full multi-line heading + feed·time), a scrollable summary
+// body — and a thick accent SIDEBAR on the right holding the read/unread
+// eye, the star and the highlight-word M badge. Page changes slide with a
+// continuous two-page transition (the outgoing page leaves while the
+// incoming one enters — no teleport cut).
 // ---------------------------------------------------------------------------
 
-#define TOP_BAR_H 24      // black top bar with the stream name
+#define PROGRESS_H 2      // accent progress line along the very top (y=0..2)
+#define TOP_BAR_H 24      // black top bar with the stream name (starts y=2)
 #define SIDEBAR_W 26      // thick accent sidebar holding the icons
-#define HEADER_FLOOR 52   // minimum header height
 #define HEADER_META_H 22  // feed·time line + padding below the heading
+#define BODY_MIN_H 40     // body keeps at least this much below the header
+
+// Sidebar icons: stacked at the top of the sidebar (in the heading's
+// vertical span), ~6 px apart, starting ~6 px below TOP_BAR_H.
+#define SIDEBAR_ICON_TOP 6 // first icon top: TOP_BAR_H + 6
+#define SIDEBAR_ICON_GAP 6 // vertical gap between the icons
+#define SIDEBAR_EYE_H 14   // almond eye icon height
+#define SIDEBAR_STAR_H 16  // star icon height
+#define SIDEBAR_M_H 14     // M badge height
+#define SIDEBAR_M_PILL_W 18 // black pill width behind the highlight M
+
+// Full-summary heap buffer: one buffer for the whole reader, never
+// per-article. malloc'd when the first chunk of a fetch arrives, freed on
+// article change / stream close / new fetch start.
+#define FULL_SUMMARY_CAP 4095   // max assembled bytes (cap)
+#define FULL_SUMMARY_BUF (FULL_SUMMARY_CAP + 1) // + NUL
+#define FULL_HINT_H 16          // "Loading full text..." line height
 
 static Article s_articles[MAX_ARTICLES];
 static int32_t s_count;
@@ -37,18 +55,33 @@ static GPoint s_last_offset; // last scroll offset seen (current page)
 
 static int16_t s_win_w;
 static int16_t s_win_h;
-static int16_t s_view_h; // page height (window minus the top bar)
+static int16_t s_view_h; // page height (window minus progress + top bar)
 
 static Window *s_tl_window;
 static Layer *s_root;
+static Layer *s_prog_line;  // 2 px accent progress line at the very top
 static Layer *s_page_area; // holds the pages; added BEFORE the sidebar so the
                            // accent icon bar always stays on top
 static Layer *s_top_bar;   // black bar, accent text (static)
 static TextLayer *s_top_text;
-static Layer *s_sidebar;   // accent bar with the read/unread + star icons
+static Layer *s_sidebar;   // accent bar with the eye/star/M icons
 static TextLayer *s_status;   // full-screen "Loading..." / "All caught up"
 static Layer *s_status_check; // accent GPath check above the status text
 static TextLayer *s_status_hint; // small hint under the status text
+
+// Full-summary fetch state: one heap buffer for the whole reader (malloc'd
+// on the first chunk, freed on article change / unload / new fetch start).
+static char *s_full_summary; // assembled full text; NULL = none
+static size_t s_full_len;    // bytes currently stored (<= FULL_SUMMARY_CAP)
+static int32_t s_full_idx;   // article index the fetch/buffer belongs to
+static bool s_full_done;     // the final chunk arrived (text complete)
+static bool s_full_fetching; // a full-summary fetch is in flight
+
+// Auto-mark timer: marks the settled article read after mark_mode()'s delay
+// (MARK_NOW marks immediately; MARK_NEVER arms nothing). Cancelled on
+// advance / regress / manual read-toggle / window unload.
+static AppTimer *s_mark_timer;
+static int32_t s_mark_timer_idx; // article the pending timer is for
 
 // ---------------------------------------------------------------------------
 // Highlight layout engine — types (the engine itself lives below, before the
@@ -63,6 +96,8 @@ static TextLayer *s_status_hint; // small hint under the status text
 #define HL_SPANS_MAX 32   // matched spans per text
 #define HL_RUNS_MAX 24    // runs per layout (12 B each); tail folds when full
 #define HL_MEASURE_W 4000 // one-line measurement box (never wraps)
+#define HL_TOKEN_MAX 140  // longest wrap-token; longer tokens hard-break
+                          // (keeps the measure scratch at 141 B)
 
 //! One cached run: a contiguous styled slice of the source text.
 typedef struct {
@@ -116,8 +151,9 @@ typedef struct {
   ScrollLayer *scroll; // summary body
   Layer *body;        // custom highlight body layer, recreated per page
   HlLayout body_layout; // cached summary runs (per article / words-change)
-  HlLayout head_layout; // cached heading runs (2 lines max, ellipsis)
+  HlLayout head_layout; // cached heading runs (full title, multi-line)
   int32_t idx;        // ring index this page shows
+  bool hl_match;      // any highlight-word match in title or summary
 } Page;
 
 static Page s_pages[2];
@@ -145,6 +181,18 @@ static const GPathInfo STAR_PATH_INFO = {
 
 static GPath *s_star_path;
 
+// Shared draw path: an almond eye (~14 px) for the read/unread sidebar icon,
+// with a small filled pupil drawn on top.
+static const GPathInfo EYE_PATH_INFO = {
+  .num_points = 8,
+  .points = (GPoint[8]){
+    { 0, -7 }, { 4, -5 }, { 7, 0 }, { 4, 5 },
+    { 0, 7 }, { -4, 5 }, { -7, 0 }, { -4, -5 },
+  },
+};
+
+static GPath *s_eye_path;
+
 // Shared draw path: a closed check mark (~16 px) for the all-caught-up
 // status; drawn in accent above the status text.
 static const GPathInfo CHECK_PATH_INFO = {
@@ -160,6 +208,10 @@ static GPath *s_status_check_path;
 static void timeline_prefetch_check(void);
 static void timeline_content_offset_changed(ScrollLayer *scroll, void *context);
 static void article_mark_read(int32_t idx);
+static void mark_timer_start(int32_t idx);
+static void mark_timer_cancel(void);
+static void full_summary_request(int32_t idx);
+static void full_summary_reset(void);
 static void maybe_advance(void);
 static void maybe_regress(void);
 static void transition_to(int8_t dir);
@@ -207,28 +259,36 @@ static void format_reltime(char *buf, size_t len, int32_t published) {
 }
 
 // ---------------------------------------------------------------------------
-// Static chrome: top bar + sidebar
+// Static chrome: progress line + top bar + sidebar
 // ---------------------------------------------------------------------------
 
-//! Black top bar; the stream name is a TextLayer in accent. A 2 px accent
-//! progress line along the bar's bottom edge tracks the current article
-//! position within the loaded stream (gated by the progress setting).
-static void top_bar_update(Layer *layer, GContext *ctx) {
+//! 2 px accent progress line along the very top of the screen (y = 0..2),
+//! above the black top bar. Tracks the current article position within the
+//! loaded stream; gated by the progress setting.
+static void progress_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
-  graphics_context_set_fill_color(ctx, GColorBlack);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-
   if (setting_progress() && s_count > 0) {
     int16_t w = (int16_t)((int32_t)(s_idx + 1) * b.size.w / s_count);
     if (w > 0) {
       graphics_context_set_fill_color(ctx, s_accent);
-      graphics_fill_rect(ctx, GRect(0, b.size.h - 2, w, 2), 0, GCornerNone);
+      graphics_fill_rect(ctx, GRect(0, 0, w, b.size.h), 0, GCornerNone);
     }
   }
 }
 
-//! Thick accent sidebar holding the icons: a white dot (filled = unread,
-//! outline = read) and, when starred, the yellow star above it.
+//! Black top bar with the stream name in accent (starts right below the
+//! progress line).
+static void top_bar_update(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+}
+
+//! Thick accent sidebar (full height below the top bar) holding the icons
+//! in the heading's vertical span: an almond eye (filled white = unread,
+//! black = read), the star (yellow = starred, black = not) and an M badge
+//! (accent on a black pill when the article matches a highlight word,
+//! plain black otherwise).
 static void sidebar_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, s_accent);
@@ -239,26 +299,65 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
     return;
   }
   int16_t cx = b.size.w / 2;
-  int16_t cy = b.size.h / 2;
+  int16_t y = TOP_BAR_H + SIDEBAR_ICON_TOP;
 
-  if (a->star && s_star_path) {
-    gpath_move_to(s_star_path, GPoint(cx, cy - 18));
-    graphics_context_set_stroke_color(ctx, GColorBlack);
-    graphics_context_set_stroke_width(ctx, 2);
-    gpath_draw_outline(ctx, s_star_path);
-    graphics_context_set_fill_color(ctx, GColorYellow);
-    gpath_draw_filled(ctx, s_star_path);
+  // Eye: almond + pupil; white when unread, black when read (the pupil
+  // flips so it stays visible on both fills).
+  if (s_eye_path) {
+    GPoint c = GPoint(cx, y + SIDEBAR_EYE_H / 2);
+    gpath_move_to(s_eye_path, c);
+    graphics_context_set_fill_color(ctx, a->read ? GColorBlack : GColorWhite);
+    gpath_draw_filled(ctx, s_eye_path);
+    graphics_context_set_fill_color(ctx, a->read ? GColorWhite : GColorBlack);
+    graphics_fill_circle(ctx, c, 2);
   }
+  y += SIDEBAR_EYE_H + SIDEBAR_ICON_GAP;
 
-  // Read/unread dot: filled = unread, outline = read.
-  graphics_context_set_stroke_color(ctx, GColorWhite);
-  graphics_context_set_stroke_width(ctx, 2);
-  if (a->read) {
-    graphics_draw_circle(ctx, GPoint(cx, cy + (a->star ? 16 : 0)), 5);
+  // Star: yellow when starred, black otherwise.
+  if (s_star_path) {
+    GPoint c = GPoint(cx, y + SIDEBAR_STAR_H / 2);
+    gpath_move_to(s_star_path, c);
+    if (a->star) {
+      graphics_context_set_fill_color(ctx, GColorYellow);
+      graphics_context_set_stroke_color(ctx, GColorBlack);
+      graphics_context_set_stroke_width(ctx, 2);
+      gpath_draw_filled(ctx, s_star_path);
+      gpath_draw_outline(ctx, s_star_path);
+    } else {
+      graphics_context_set_fill_color(ctx, GColorBlack);
+      gpath_draw_filled(ctx, s_star_path);
+    }
+  }
+  y += SIDEBAR_STAR_H + SIDEBAR_ICON_GAP;
+
+  // M badge: the current article's page caches whether any highlight word
+  // matches (set when the layouts are built).
+  bool matched = false;
+  for (int i = 0; i < 2; i++) {
+    const Page *pg = &s_pages[i];
+    if (pg->idx == s_idx) {
+      matched = pg->hl_match;
+      break;
+    }
+  }
+  GFont mf = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+  if (matched) {
+    // Small black rounded pill behind the accent M (the SDK has no
+    // fill-round-rect: a capped rect + two end circles make the capsule).
+    graphics_context_set_fill_color(ctx, GColorBlack);
+    int16_t r = SIDEBAR_M_H / 2;
+    int16_t half = SIDEBAR_M_PILL_W / 2;
+    graphics_fill_rect(ctx, GRect(cx - half + r, y, 2 * (half - r),
+                                  SIDEBAR_M_H),
+                       0, GCornerNone);
+    graphics_fill_circle(ctx, GPoint(cx - half + r, y + r), r);
+    graphics_fill_circle(ctx, GPoint(cx + half - r, y + r), r);
+    graphics_context_set_text_color(ctx, s_accent);
   } else {
-    graphics_context_set_fill_color(ctx, GColorWhite);
-    graphics_fill_circle(ctx, GPoint(cx, cy + (a->star ? 16 : 0)), 5);
+    graphics_context_set_text_color(ctx, GColorBlack);
   }
+  graphics_draw_text(ctx, "M", mf, GRect(cx - 8, y, 16, SIDEBAR_M_H),
+                     GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -534,7 +633,7 @@ static void hl_build_layout(const HlBuildParams *p) {
   // Static scratch: the engine is single-threaded and re-layouts happen one
   // at a time. Keeping these off the stack matters — the app stack is only
   // 2 KB on basalt-class watches and this frame was 584 B.
-  static char scratch[141]; // longest slice: Article.summary[140]
+  static char scratch[HL_TOKEN_MAX + 1]; // longest slice: one hard-broken token
   static HlSpan spans[HL_SPANS_MAX];
 
   int nspans = hl_collect_spans(t, spans, HL_SPANS_MAX);
@@ -585,6 +684,13 @@ static void hl_build_layout(const HlBuildParams *p) {
       i++;
     }
     size_t wend = i;
+    if (wend - woff > HL_TOKEN_MAX) {
+      // Pathological tokens (a full summary can carry a huge unbroken
+      // string): hard-break so the measure scratch (HL_TOKEN_MAX + NUL)
+      // never overflows. The remainder re-tokens on the next pass.
+      wend = woff + HL_TOKEN_MAX;
+      i = wend;
+    }
 
     // Wrap-token [woff, wend): split into styled segments (a token never
     // splits across lines — wrap on the sum of the segment widths).
@@ -678,13 +784,19 @@ static void hl_build_layout(const HlBuildParams *p) {
   }
 }
 
-//! Replay a cached layout. ox/oy offset the text origin (the layer position).
+//! Replay a cached layout. ox/oy offset the text origin (the layer position);
+//! y_limit > 0 skips runs whose line ENDS at or below that absolute y (used
+//! by the header so a clamped long title never draws under the feed·time
+//! line).
 static void hl_draw(GContext *ctx, const char *text, const HlLayout *lo,
                     int16_t ox, int16_t oy, GFont base_font, GFont hl_font,
-                    GColor base_c, GColor hl_c) {
-  char scratch[141];
+                    GColor base_c, GColor hl_c, int16_t y_limit) {
+  char scratch[HL_TOKEN_MAX + 1];
   for (int k = 0; k < lo->n; k++) {
     const HlRun *r = &lo->runs[k];
+    if (y_limit > 0 && oy + r->y + lo->line_h > y_limit) {
+      continue; // this line would collide with the feed·time line: skip it
+    }
     GFont f = r->style ? hl_font : base_font;
     graphics_context_set_text_color(ctx, r->style ? hl_c : base_c);
     // A very wide one-line box: glyphs start at the box origin and are never
@@ -722,6 +834,9 @@ static int body_page_idx(Layer *body) {
 
 //! Summary body: paints the page background and replays the cached runs
 //! (base words in theme_fg, highlighted words in accent + bold + underline).
+//! When the assembled full summary of the page's article is complete, the
+//! runs (rebuilt from the heap buffer) draw from it instead of the 140-char
+//! preview; while a fetch is in flight a subtle muted hint trails the text.
 static void body_update(Layer *layer, GContext *ctx) {
   int pi = body_page_idx(layer);
   if (pi < 0) {
@@ -735,10 +850,199 @@ static void body_update(Layer *layer, GContext *ctx) {
   }
   graphics_context_set_fill_color(ctx, theme_bg());
   graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
-  hl_draw(ctx, a->summary, &p->body_layout, 0, 0,
+  const char *text = a->summary;
+  if (s_full_done && s_full_summary && p->idx == s_full_idx) {
+    text = s_full_summary;
+  }
+  hl_draw(ctx, text, &p->body_layout, 0, 0,
           fonts_get_system_font(FONT_KEY_GOTHIC_18),
           fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-          theme_fg(), s_accent);
+          theme_fg(), s_accent, 0);
+  if (p->idx == s_full_idx && s_full_fetching && !s_full_done) {
+    graphics_context_set_text_color(ctx, theme_muted());
+    graphics_draw_text(ctx, "Loading full text...",
+                       fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                       GRect(0, p->body_layout.height + 4,
+                             layer_get_bounds(layer).size.w, 16),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft,
+                       NULL);
+  }
+}
+
+//! Size the body layer + scroll content to the page's cached layout, adding
+//! room for the "Loading full text..." hint when a fetch is in flight.
+static void body_resize(Page *p) {
+  int16_t extra =
+      (p->idx == s_full_idx && s_full_fetching && !s_full_done)
+          ? FULL_HINT_H
+          : 0;
+  layer_set_frame(p->body, GRect(4, 2, s_win_w - SIDEBAR_W - 8,
+                                 p->body_layout.height + extra));
+  int32_t body_h = p->body_layout.height + 6 + extra; // 2 px pad + 4 px air
+  GSize content = scroll_layer_get_content_size(p->scroll);
+  if (content.h != body_h) {
+    scroll_layer_set_content_size(p->scroll,
+                                  GSize(s_win_w - SIDEBAR_W, body_h));
+  }
+  layer_mark_dirty(p->body);
+}
+
+// ---------------------------------------------------------------------------
+// Full summary (fetch + assembly + render)
+// ---------------------------------------------------------------------------
+
+//! Did the cached layout contain any highlight-style run?
+static bool layout_has_hl(const HlLayout *lo) {
+  for (int k = 0; k < lo->n; k++) {
+    if (lo->runs[k].style) {
+      return true;
+    }
+  }
+  return false;
+}
+
+//! Re-layout one page's body from the given text and resize to match.
+static void body_relayout(Page *p, const char *text) {
+  GFont gothic18 = fonts_get_system_font(FONT_KEY_GOTHIC_18);
+  GFont gothic18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  hl_build_layout(&(HlBuildParams){
+    .text = text, .base_font = gothic18, .hl_font = gothic18b,
+    .width = (int16_t)(s_win_w - SIDEBAR_W - 8), .max_lines = 0,
+    .out = &p->body_layout,
+  });
+  p->hl_match = layout_has_hl(&p->head_layout) ||
+                layout_has_hl(&p->body_layout);
+  body_resize(p);
+  if (s_sidebar) {
+    layer_mark_dirty(s_sidebar); // the M badge follows the new matches
+  }
+}
+
+//! Drop the full-summary buffer + fetch state (article change, unload, new
+//! fetch start). The body keeps whatever layout it currently has.
+static void full_summary_reset(void) {
+  if (s_full_summary) {
+    free(s_full_summary);
+    s_full_summary = NULL;
+  }
+  s_full_len = 0;
+  s_full_idx = -1;
+  s_full_done = false;
+  s_full_fetching = false;
+}
+
+//! The current page's fetch state changed in a way that affects its body
+//! geometry (hint on/off): re-size in place.
+static void full_summary_hint_update(void) {
+  if (s_count == 0 || !cur_page()->body) {
+    return;
+  }
+  body_resize(cur_page());
+}
+
+//! An article settled under the reader: ask the phone for its full summary.
+//! The 140-char preview stays in the body until the chunks assemble; the
+//! fetch is skipped when the preview already is the full summary.
+static void full_summary_request(int32_t idx) {
+  full_summary_reset(); // new fetch start: free the previous buffer
+  if (idx < 0 || idx >= s_count) {
+    return;
+  }
+  const Article *a = &s_articles[idx];
+  if (strlen(a->summary) < (size_t)(sizeof(a->summary) - 1)) {
+    return; // the preview wasn't truncated: it already is the full summary
+  }
+  s_full_idx = idx;
+  s_full_fetching = true;
+  proto_request_summary(a->id);
+  full_summary_hint_update();
+}
+
+//! The assembled full text replaced the preview: re-layout the current page
+//! from the heap buffer and grow the scroll content.
+static void full_summary_apply(void) {
+  if (!s_full_done || !s_full_summary) {
+    return;
+  }
+  if (s_full_idx != s_idx || s_count == 0) {
+    return; // the reader moved on; the buffer is freed at the next settle
+  }
+  Page *p = cur_page();
+  if (!p->body || p->idx != s_idx) {
+    return; // mid-transition: the settled page isn't current yet
+  }
+  body_relayout(p, s_full_summary);
+}
+
+//! The full-summary text under the current page was thrown away (stale-race
+//! self-heal): put the 140-char preview layout back.
+static void full_summary_revert_to_preview(void) {
+  if (s_count == 0 || s_idx < 0 || s_idx >= s_count) {
+    return;
+  }
+  Page *p = cur_page();
+  if (!p->body || p->idx != s_idx) {
+    return;
+  }
+  body_relayout(p, s_articles[s_idx].summary);
+}
+
+//! One FullSummary chunk arrived (called from the AppMessage inbox path —
+//! shallow stack only: no snprintf/strtoll/strstr; the chunk text lives in
+//! the inbox buffer and is copied here). Assembles into the one heap buffer;
+//! on the final chunk the full text replaces the preview in the body.
+void timeline_full_summary_chunk(const char *text, bool last) {
+  if (!text) {
+    return;
+  }
+  size_t tlen = strlen(text);
+
+  // Chunks of a fetch the reader has left: ignore. A non-empty stream
+  // arriving AFTER a completed buffer is the previous fetch's tail racing
+  // past an article change (proto sends no id, so the attribution is by
+  // position): restart the assembly so the real stream wins, then fall
+  // through to assemble this chunk.
+  if (s_full_idx != s_idx) {
+    return;
+  }
+  if (s_full_done) {
+    if (tlen == 0) {
+      return; // trailing finalize must not clobber a completed buffer
+    }
+    full_summary_reset();
+    s_full_idx = s_idx;
+    s_full_fetching = true;
+    full_summary_revert_to_preview();
+  }
+
+  if (!s_full_summary) {
+    s_full_summary = malloc(FULL_SUMMARY_BUF);
+    if (!s_full_summary) {
+      return; // heap exhausted: keep the preview
+    }
+    s_full_summary[0] = '\0';
+    s_full_len = 0;
+  }
+  if (s_full_len < FULL_SUMMARY_CAP) {
+    size_t room = FULL_SUMMARY_CAP - s_full_len;
+    size_t take = tlen < room ? tlen : room;
+    memcpy(s_full_summary + s_full_len, text, take);
+    s_full_len += take;
+    s_full_summary[s_full_len] = '\0';
+  }
+
+  if (last) {
+    s_full_done = true;
+    s_full_fetching = false;
+    if (!s_full_summary || s_full_len == 0) {
+      // Empty/errored fetch (SummaryLast alone): keep the preview, close
+      // the fetch and drop the hint.
+      full_summary_reset();
+      full_summary_hint_update();
+      return;
+    }
+    full_summary_apply();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -778,9 +1082,8 @@ static void header_update(Layer *layer, GContext *ctx) {
   }
 
   GFont heading_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
-  hl_draw(ctx, a->title, &p->head_layout, 4, 2, heading_font, heading_font,
-          GColorBlack, GColorWhite);
-
+  // The feed·time line lives at the header's bottom; a clamped long title
+  // must not draw under it (lines ending in the meta zone are skipped).
   char meta[48];
   char t[16];
   format_reltime(t, sizeof(t), a->published);
@@ -789,6 +1092,8 @@ static void header_update(Layer *layer, GContext *ctx) {
   graphics_draw_text(ctx, meta, fonts_get_system_font(FONT_KEY_GOTHIC_14),
                      GRect(4, b.size.h - 18, b.size.w - SIDEBAR_W - 8, 16),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  hl_draw(ctx, a->title, &p->head_layout, 4, 2, heading_font, heading_font,
+          GColorBlack, GColorWhite, (int16_t)(b.size.h - 20));
 }
 
 //! Build one article page (header + scrollable summary) into a fresh set of
@@ -797,9 +1102,10 @@ static void page_build(Page *p, int32_t idx) {
   const Article *a = &s_articles[idx];
   p->idx = idx;
 
-  // Cached highlight layouts: heading (two GOTHIC_18 lines max, trailing
-  // ellipsis, the whole title stays bold) and summary body (unlimited lines,
-  // base GOTHIC_18 with GOTHIC_18_BOLD for highlighted words).
+  // Cached highlight layouts: heading (the FULL title, multi-line, no
+  // ellipsis cap; GOTHIC_18_BOLD throughout, highlighted words drawn white)
+  // and summary body (unlimited lines, base GOTHIC_18 with GOTHIC_18_BOLD
+  // for highlighted words).
   GFont gothic18 = fonts_get_system_font(FONT_KEY_GOTHIC_18);
   GFont gothic18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
   int16_t text_w = (int16_t)(s_win_w - SIDEBAR_W - 8);
@@ -808,7 +1114,7 @@ static void page_build(Page *p, int32_t idx) {
     .base_font = gothic18b,
     .hl_font = gothic18b,
     .width = text_w,
-    .max_lines = 2,
+    .max_lines = 0,
     .out = &p->head_layout,
   });
   hl_build_layout(&(HlBuildParams){
@@ -819,15 +1125,18 @@ static void page_build(Page *p, int32_t idx) {
     .max_lines = 0,
     .out = &p->body_layout,
   });
+  p->hl_match = layout_has_hl(&p->head_layout) ||
+                layout_has_hl(&p->body_layout);
 
-  p->root = layer_create(GRect(0, TOP_BAR_H, s_win_w, s_view_h));
+  p->root = layer_create(GRect(0, TOP_BAR_H + PROGRESS_H, s_win_w, s_view_h));
   layer_add_child(s_page_area, p->root);
 
-  // Header height from the actual (capped) heading layout: one or two
-  // GOTHIC_18 lines + room for the feed·time line, floored at HEADER_FLOOR.
+  // Header height from the full wrapped heading + the feed·time line,
+  // clamped so the body keeps BODY_MIN_H.
   int16_t hh = (int16_t)(p->head_layout.height + HEADER_META_H);
-  if (hh < HEADER_FLOOR) {
-    hh = HEADER_FLOOR;
+  int16_t hh_max = (int16_t)(s_view_h - BODY_MIN_H);
+  if (hh > hh_max) {
+    hh = hh_max;
   }
   p->header = layer_create(GRect(0, 0, s_win_w, hh));
   layer_set_update_proc(p->header, header_update);
@@ -840,14 +1149,11 @@ static void page_build(Page *p, int32_t idx) {
   scroll_layer_set_shadow_hidden(p->scroll, true);
   layer_add_child(p->root, scroll_layer_get_layer(p->scroll));
 
-  int32_t body_h = p->body_layout.height + 6; // 2 px top pad + 4 px air
-
-  p->body = layer_create(GRect(4, 2, s_win_w - SIDEBAR_W - 8,
-                               p->body_layout.height));
+  p->body = layer_create(GRect(4, 2, s_win_w - SIDEBAR_W - 8, 1));
   layer_set_update_proc(p->body, body_update);
   layer_add_child(scroll_layer_get_layer(p->scroll), p->body);
+  body_resize(p); // sizes body + scroll content to the layout (+ hint)
 
-  scroll_layer_set_content_size(p->scroll, GSize(s_win_w - SIDEBAR_W, body_h));
   scroll_layer_set_content_offset(p->scroll, GPointZero, false);
 }
 
@@ -869,6 +1175,7 @@ static void page_destroy(Page *p) {
     p->root = NULL;
   }
   p->idx = -1;
+  p->hl_match = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -894,14 +1201,17 @@ static void timeline_content_offset_changed(ScrollLayer *scroll, void *context) 
 }
 
 //! Transition finished: the target page is fully on screen. Commit the new
-//! index, mark read on advances, drain the triage stream (unstar the article
-//! we landed on when advancing inside Starred), drop the old page and
-//! release the locks.
+//! index, drain the triage stream (unstar the article we landed on when
+//! advancing inside Starred), drop the old page, release the locks, then
+//! arm the auto-mark timer and fetch the full summary for the settled
+//! article.
 static void transition_finalize(void) {
   s_idx = s_target_idx;
-  if (s_dir > 0 && s_mark_detail) {
-    article_mark_read(s_idx);
-  }
+  page_destroy(&s_pages[s_cur]);
+  s_cur = 1 - s_cur;
+  s_advancing = false;
+  s_advance_guard = false;
+  s_last_offset = GPointZero;
   if (s_dir > 0 && setting_triage() &&
       strcmp(s_stream, "user/-/state/com.google/starred") == 0) {
     if (s_idx >= 0 && s_idx < s_count) {
@@ -910,16 +1220,16 @@ static void transition_finalize(void) {
       proto_star(a->id, 0);
     }
   }
-  page_destroy(&s_pages[s_cur]);
-  s_cur = 1 - s_cur;
-  s_advancing = false;
-  s_advance_guard = false;
-  s_last_offset = GPointZero;
+  mark_timer_start(s_idx);
+  full_summary_request(s_idx);
   if (s_sidebar) {
     layer_mark_dirty(s_sidebar);
   }
   if (s_top_bar) {
-    layer_mark_dirty(s_top_bar); // progress line follows the new index
+    layer_mark_dirty(s_top_bar);
+  }
+  if (s_prog_line) {
+    layer_mark_dirty(s_prog_line); // progress line follows the new index
   }
   timeline_prefetch_check();
 }
@@ -955,15 +1265,17 @@ static void transition_to(int8_t dir) {
   s_advance_guard = (dir > 0);
   s_dir = dir;
   s_target_idx = nidx;
+  mark_timer_cancel(); // leaving the current article: drop its auto-mark
 
+  int16_t top = TOP_BAR_H + PROGRESS_H; // page area starts below both bars
   Page *sp = spare_page();
   page_build(sp, nidx);
-  layer_set_frame(sp->root, GRect(0, TOP_BAR_H + dir * s_view_h, s_win_w, s_view_h));
+  layer_set_frame(sp->root, GRect(0, top + dir * s_view_h, s_win_w, s_view_h));
 
   Page *cp = cur_page();
 
   s_from_a = layer_get_frame(cp->root);
-  s_to_a = GRect(0, TOP_BAR_H - dir * s_view_h, s_win_w, s_view_h);
+  s_to_a = GRect(0, top - dir * s_view_h, s_win_w, s_view_h);
   s_anim_a = (Animation *)property_animation_create_layer_frame(cp->root, &s_from_a, &s_to_a);
   animation_set_duration(s_anim_a, 260);
   animation_set_curve(s_anim_a, AnimationCurveEaseInOut);
@@ -973,7 +1285,7 @@ static void transition_to(int8_t dir) {
   animation_schedule(s_anim_a);
 
   s_from_b = layer_get_frame(sp->root);
-  s_to_b = GRect(0, TOP_BAR_H, s_win_w, s_view_h);
+  s_to_b = GRect(0, top, s_win_w, s_view_h);
   s_anim_b = (Animation *)property_animation_create_layer_frame(sp->root, &s_from_b, &s_to_b);
   animation_set_duration(s_anim_b, 260);
   animation_set_curve(s_anim_b, AnimationCurveEaseInOut);
@@ -1037,8 +1349,10 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   }
 }
 
-//! SELECT advances to the next article; on an empty (all-caught-up) stream
-//! it re-fetches the first page (the status hint points at this).
+//! SELECT toggles the current article's read state (unread -> mark read via
+//! the batch path, read -> unread via proto_mark_unread) and cancels any
+//! pending auto-mark timer. On an empty (all-caught-up) stream it re-fetches
+//! the first page (the status hint points at this).
 static void timeline_select_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0) {
     if (!s_loading) {
@@ -1051,7 +1365,17 @@ static void timeline_select_click(ClickRecognizerRef rec, void *ctx) {
   if (s_advancing) {
     return;
   }
-  maybe_advance();
+  Article *a = &s_articles[s_idx];
+  if (a->read) {
+    a->read = 0;
+    proto_mark_unread(a->id);
+  } else {
+    article_mark_read(s_idx);
+  }
+  mark_timer_cancel(); // the manual toggle supersedes the auto-mark timer
+  if (s_sidebar) {
+    layer_mark_dirty(s_sidebar); // the eye flips
+  }
 }
 
 //! Long SELECT toggles the star of the current article (fire-and-forget);
@@ -1133,24 +1457,30 @@ static void timeline_window_load(Window *window) {
   GRect bounds = layer_get_bounds(root);
   s_win_w = bounds.size.w;
   s_win_h = bounds.size.h;
-  s_view_h = s_win_h - TOP_BAR_H;
+  s_view_h = s_win_h - TOP_BAR_H - PROGRESS_H;
   s_root = root;
 
   window_set_background_color(window, theme_bg());
 
   s_star_path = gpath_create(&STAR_PATH_INFO);
+  s_eye_path = gpath_create(&EYE_PATH_INFO);
   s_status_check_path = gpath_create(&CHECK_PATH_INFO);
   s_last_offset = GPointZero;
   s_cur = 0;
   s_pages[0].idx = -1;
   s_pages[1].idx = -1;
 
-  // Black top bar with the stream name in accent.
-  s_top_bar = layer_create(GRect(0, 0, s_win_w, TOP_BAR_H));
+  // 2 px accent progress line along the very top (y = 0..2), above the bar.
+  s_prog_line = layer_create(GRect(0, 0, s_win_w, PROGRESS_H));
+  layer_set_update_proc(s_prog_line, progress_update);
+  layer_add_child(root, s_prog_line);
+
+  // Black top bar with the stream name in accent (y = 2..2 + TOP_BAR_H).
+  s_top_bar = layer_create(GRect(0, PROGRESS_H, s_win_w, TOP_BAR_H));
   layer_set_update_proc(s_top_bar, top_bar_update);
   layer_add_child(root, s_top_bar);
 
-  s_top_text = text_layer_create(GRect(4, 1, s_win_w - SIDEBAR_W - 8, TOP_BAR_H - 2));
+  s_top_text = text_layer_create(GRect(4, PROGRESS_H + 1, s_win_w - SIDEBAR_W - 8, TOP_BAR_H - 2));
   text_layer_set_font(s_top_text, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_top_text, GTextAlignmentLeft);
   text_layer_set_overflow_mode(s_top_text, GTextOverflowModeTrailingEllipsis);
@@ -1183,10 +1513,13 @@ static void timeline_window_load(Window *window) {
   layer_add_child(root, text_layer_get_layer(s_status_hint));
 
   // Page area (below the sidebar in z-order) + the accent sidebar on top.
-  s_page_area = layer_create(GRect(0, TOP_BAR_H, s_win_w, s_view_h));
+  // The sidebar spans the full height below the top bar, drawn over the
+  // header's right edge.
+  s_page_area = layer_create(GRect(0, TOP_BAR_H + PROGRESS_H, s_win_w, s_view_h));
   layer_add_child(root, s_page_area);
 
-  s_sidebar = layer_create(GRect(s_win_w - SIDEBAR_W, TOP_BAR_H, SIDEBAR_W, s_view_h));
+  s_sidebar = layer_create(GRect(s_win_w - SIDEBAR_W, TOP_BAR_H + PROGRESS_H,
+                                 SIDEBAR_W, s_view_h));
   layer_set_update_proc(s_sidebar, sidebar_update);
   layer_add_child(root, s_sidebar);
 
@@ -1199,6 +1532,8 @@ static void timeline_window_load(Window *window) {
 //! in-flight animations (so no stopped handler touches destroyed layers)
 //! and release the layer pointers.
 static void timeline_close(void) {
+  mark_timer_cancel(); // the pending auto-mark must not fire on dead pages
+  full_summary_reset(); // free the assembled full text
   proto_flush_now();
   if (s_anim_a) {
     Animation *old = s_anim_a;
@@ -1214,6 +1549,7 @@ static void timeline_close(void) {
   page_destroy(&s_pages[1]);
   s_root = NULL;
   s_page_area = NULL;
+  s_prog_line = NULL;
   s_top_bar = NULL;
   s_top_text = NULL;
   s_sidebar = NULL;
@@ -1224,6 +1560,10 @@ static void timeline_window_unload(Window *window) {
   if (s_star_path) {
     gpath_destroy(s_star_path);
     s_star_path = NULL;
+  }
+  if (s_eye_path) {
+    gpath_destroy(s_eye_path);
+    s_eye_path = NULL;
   }
   if (s_status_check_path) {
     gpath_destroy(s_status_check_path);
@@ -1248,6 +1588,10 @@ static void timeline_window_unload(Window *window) {
   if (s_top_bar) {
     layer_destroy(s_top_bar);
     s_top_bar = NULL;
+  }
+  if (s_prog_line) {
+    layer_destroy(s_prog_line);
+    s_prog_line = NULL;
   }
   if (s_sidebar) {
     layer_destroy(s_sidebar);
@@ -1278,6 +1622,8 @@ void timeline_open(const char *stream, const char *title) {
   s_advancing = false;
   s_advance_guard = false;
   s_last_offset = GPointZero;
+  mark_timer_cancel(); // stale auto-mark must not fire into the new stream
+  full_summary_reset(); // stale full text must not leak across streams
 
   s_tl_window = window_create();
   window_set_window_handlers(s_tl_window, (WindowHandlers){
@@ -1303,6 +1649,7 @@ void timeline_page_begin(int32_t n) {
     if (drop >= s_count) {
       s_count = 0;
       s_idx = 0;
+      full_summary_reset(); // everything dropped: the buffered text is gone
     } else {
       memmove(s_articles, &s_articles[drop],
               (size_t)(s_count - drop) * sizeof(Article));
@@ -1310,6 +1657,21 @@ void timeline_page_begin(int32_t n) {
       s_idx -= drop;
       if (s_idx < 0) {
         s_idx = 0;
+      }
+      // The live pages follow the ring too (their article moved down by
+      // `drop`; a page whose article was evicted goes inert).
+      for (int i = 0; i < 2; i++) {
+        if (s_pages[i].idx >= drop) {
+          s_pages[i].idx -= drop;
+        } else if (s_pages[i].idx >= 0) {
+          s_pages[i].idx = -1;
+        }
+      }
+      if (s_full_idx >= 0) {
+        s_full_idx -= drop; // the buffered article shifted with the ring
+        if (s_full_idx < 0) {
+          full_summary_reset(); // the buffered article was dropped
+        }
       }
     }
   }
@@ -1325,6 +1687,18 @@ void timeline_collect_article(DictionaryIterator *iter) {
     s_count--;
     if (s_idx > 0) {
       s_idx--;
+    }
+    for (int i = 0; i < 2; i++) {
+      if (s_pages[i].idx > 0) {
+        s_pages[i].idx--;
+      } else if (s_pages[i].idx == 0) {
+        s_pages[i].idx = -1; // the page's article was evicted
+      }
+    }
+    if (s_full_idx > 0) {
+      s_full_idx--; // the buffered article shifted with the ring
+    } else if (s_full_idx == 0) {
+      full_summary_reset(); // the buffered article was dropped
     }
   }
   Article *a = &s_articles[s_count++];
@@ -1357,8 +1731,8 @@ void timeline_collect_article(DictionaryIterator *iter) {
   }
 
   if (first && s_tl_window) {
-    // First article of the stream: build page 0, hide the status and mark
-    // it per the list toggle.
+    // First article of the stream: build page 0, hide the status, then
+    // settle it like any article (auto-mark timer + full-summary fetch).
     s_cur = 0;
     page_build(&s_pages[0], 0);
     status_update();
@@ -1366,11 +1740,13 @@ void timeline_collect_article(DictionaryIterator *iter) {
       layer_mark_dirty(s_sidebar);
     }
     if (s_top_bar) {
-      layer_mark_dirty(s_top_bar); // progress line appears with the first article
+      layer_mark_dirty(s_top_bar);
     }
-    if (s_mark_list) {
-      article_mark_read(0);
+    if (s_prog_line) {
+      layer_mark_dirty(s_prog_line); // progress line appears with the article
     }
+    mark_timer_start(0);
+    full_summary_request(0);
     timeline_prefetch_check();
   }
 }
@@ -1387,7 +1763,10 @@ void timeline_page_end(const char *cont) {
   }
   status_update();
   if (s_top_bar) {
-    layer_mark_dirty(s_top_bar); // progress line grows with the loaded count
+    layer_mark_dirty(s_top_bar);
+  }
+  if (s_prog_line) {
+    layer_mark_dirty(s_prog_line); // progress line grows with the loaded count
   }
   if (s_count > 0) {
     timeline_prefetch_check();
@@ -1423,8 +1802,48 @@ static void article_mark_read(int32_t idx) {
   proto_mark_push(a->id);
   tree_feed_decrement(a->feed_id);
   if (s_sidebar) {
-    layer_mark_dirty(s_sidebar); // the read/unread dot flips
+    layer_mark_dirty(s_sidebar); // the read/unread eye flips
   }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-mark timer (mark_mode())
+// ---------------------------------------------------------------------------
+
+//! The delayed auto-mark fired: mark the article read only if the reader is
+//! still on it and it is still unread (article_mark_read re-checks).
+static void mark_timer_cb(void *data) {
+  s_mark_timer = NULL;
+  if (s_idx == s_mark_timer_idx) {
+    article_mark_read(s_idx);
+  }
+}
+
+//! Drop any pending auto-mark timer (advance, regress, manual read/unread
+//! toggle, window unload).
+static void mark_timer_cancel(void) {
+  if (s_mark_timer) {
+    app_timer_cancel(s_mark_timer);
+    s_mark_timer = NULL;
+  }
+}
+
+//! Arm the auto-mark for the article that just settled under the reader:
+//! MARK_NEVER arms nothing, MARK_NOW marks immediately, the delayed modes
+//! register an app timer whose callback re-checks the article.
+static void mark_timer_start(int32_t idx) {
+  mark_timer_cancel();
+  int mode = mark_mode();
+  if (mode <= MARK_NEVER || mode > MARK_10S) {
+    return;
+  }
+  if (mode == MARK_NOW) {
+    article_mark_read(idx);
+    return;
+  }
+  static const int32_t mark_delay_ms[] = { 0, 0, 1000, 2000, 3000, 5000, 10000 };
+  s_mark_timer_idx = idx;
+  s_mark_timer = app_timer_register(mark_delay_ms[mode], mark_timer_cb, NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,7 +1869,10 @@ void timeline_apply_settings(void) {
     text_layer_set_text_color(s_top_text, s_accent);
   }
   if (s_top_bar) {
-    layer_mark_dirty(s_top_bar); // accent progress line
+    layer_mark_dirty(s_top_bar);
+  }
+  if (s_prog_line) {
+    layer_mark_dirty(s_prog_line); // accent progress line
   }
   for (int i = 0; i < 2; i++) {
     Page *p = &s_pages[i];
@@ -1488,29 +1910,30 @@ void timeline_highlight_words_changed(void) {
     const Article *a = &s_articles[p->idx];
     hl_build_layout(&(HlBuildParams){
       .text = a->title, .base_font = gothic18b, .hl_font = gothic18b,
-      .width = text_w, .max_lines = 2, .out = &p->head_layout,
+      .width = text_w, .max_lines = 0, .out = &p->head_layout,
     });
+    // The body text depends on the full-summary state: the heap buffer when
+    // the article's full text is complete, else the 140-char preview.
+    const char *body_text = a->summary;
+    if (s_full_done && s_full_summary && p->idx == s_full_idx) {
+      body_text = s_full_summary;
+    }
     hl_build_layout(&(HlBuildParams){
-      .text = a->summary, .base_font = gothic18, .hl_font = gothic18b,
+      .text = body_text, .base_font = gothic18, .hl_font = gothic18b,
       .width = text_w, .max_lines = 0, .out = &p->body_layout,
     });
+    p->hl_match = layout_has_hl(&p->head_layout) ||
+                  layout_has_hl(&p->body_layout);
 
-    // The body layer follows the layout height; the scroll content adds the
-    // usual 2 px top pad + 4 px air at the bottom.
-    layer_set_frame(p->body, GRect(4, 2, s_win_w - SIDEBAR_W - 8,
-                                   p->body_layout.height));
-    int32_t body_h = p->body_layout.height + 6;
-    GSize content = scroll_layer_get_content_size(p->scroll);
-    if (content.h != body_h) {
-      scroll_layer_set_content_size(p->scroll,
-                                    GSize(s_win_w - SIDEBAR_W, body_h));
-    }
-    // The heading layout is capped at two lines (both fonts are the same
-    // GOTHIC_18_BOLD here), so the header height is stable across word-list
-    // changes; recompute and resize anyway for robustness.
+    body_resize(p); // body layer + scroll content follow the layout (+ hint)
+
+    // The heading layout is the full wrapped title (multi-line); both fonts
+    // are the same GOTHIC_18_BOLD here, so the header height is stable
+    // across word-list changes; recompute and resize anyway.
     int16_t hh = (int16_t)(p->head_layout.height + HEADER_META_H);
-    if (hh < HEADER_FLOOR) {
-      hh = HEADER_FLOOR;
+    int16_t hh_max = (int16_t)(s_view_h - BODY_MIN_H);
+    if (hh > hh_max) {
+      hh = hh_max;
     }
     if (layer_get_frame(p->header).size.h != hh) {
       layer_set_frame(p->header, GRect(0, 0, s_win_w, hh));
@@ -1519,5 +1942,8 @@ void timeline_highlight_words_changed(void) {
     }
     layer_mark_dirty(p->body);
     layer_mark_dirty(p->header);
+  }
+  if (s_sidebar) {
+    layer_mark_dirty(s_sidebar); // the M badge reflects the new word list
   }
 }

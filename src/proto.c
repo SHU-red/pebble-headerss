@@ -173,6 +173,36 @@ void proto_mark_all_read(const char *stream) {
   }
 }
 
+//! Ask the phone for the full summary of one article. The reply streams
+//! back as FullSummary chunks (+ SummaryLast on the final one) which
+//! proto_handle_inbox hands to the timeline reader. `id` is the article's
+//! decimal microsecond id (as kept in Article.id).
+void proto_request_summary(const char *id) {
+  DictionaryIterator *iter;
+  AppMessageResult res = app_message_outbox_begin(&iter);
+  if (res == APP_MSG_OK) {
+    dict_write_cstring(iter, MESSAGE_KEY_FetchSummary, id ? id : "");
+    res = app_message_outbox_send();
+  }
+  if (res != APP_MSG_OK) {
+    APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchSummary (%d)", (int)res);
+  }
+}
+
+//! Toggle one article back to unread on the server (removes the read tag).
+//! `id` is the article's decimal microsecond id.
+void proto_mark_unread(const char *id) {
+  DictionaryIterator *iter;
+  AppMessageResult res = app_message_outbox_begin(&iter);
+  if (res == APP_MSG_OK) {
+    dict_write_cstring(iter, MESSAGE_KEY_MarkUnread, id ? id : "");
+    res = app_message_outbox_send();
+  }
+  if (res != APP_MSG_OK) {
+    APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send MarkUnread (%d)", (int)res);
+  }
+}
+
 //! Answer the phone's RequestConfig with the durable watch-bound settings.
 //! The connection fields (server/user/password) are phone-side only and
 //! never round-trip (agreed with the JS agent). The smart-surface toggles
@@ -183,8 +213,6 @@ void proto_reply_config(void) {
     dict_write_int32(iter, MESSAGE_KEY_AccentColor, (int32_t)s_accent.argb);
     dict_write_int32(iter, MESSAGE_KEY_DarkMode, s_dark ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_TouchEnabled, s_touch ? 1 : 0);
-    dict_write_int32(iter, MESSAGE_KEY_MarkOnOpenList, s_mark_list ? 1 : 0);
-    dict_write_int32(iter, MESSAGE_KEY_MarkOnOpenDetail, s_mark_detail ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_ImportantRow, setting_important() ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_TriageDrain, setting_triage() ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_NewDot, setting_newdot() ? 1 : 0);
@@ -277,6 +305,23 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     return;
   }
 
+  // Full summary stream (fetch-by-id reply): the phone sends FullSummary
+  // text chunks with SummaryLast=1 on the final chunk. The chunk is handed
+  // to the timeline reader directly, NOT copied — the inbox buffer stays
+  // alive for the whole callback and the reader copies into its own heap
+  // buffer. Shallow-stack diet: no copy_str/snprintf on this path.
+  if ((t = dict_find(iter, MESSAGE_KEY_FullSummary))) {
+    bool last = dict_find(iter, MESSAGE_KEY_SummaryLast) != NULL;
+    timeline_full_summary_chunk(t->value->cstring, last);
+    return;
+  }
+  // SummaryLast alone (finalize an empty/errored fetch): close the reader's
+  // buffer so the preview/partial text settles.
+  if ((t = dict_find(iter, MESSAGE_KEY_SummaryLast))) {
+    timeline_full_summary_chunk("", true);
+    return;
+  }
+
   // Settings from Clay: the phone delivers every watch-bound key in one
   // message; persist, re-theme and re-arm touch navigation.
   bool settings = false;
@@ -292,14 +337,6 @@ void proto_handle_inbox(DictionaryIterator *iter) {
   }
   if ((t = dict_find(iter, MESSAGE_KEY_TouchEnabled))) {
     s_touch = t->value->int32 != 0;
-    settings = true;
-  }
-  if ((t = dict_find(iter, MESSAGE_KEY_MarkOnOpenList))) {
-    s_mark_list = t->value->int32 != 0;
-    settings = true;
-  }
-  if ((t = dict_find(iter, MESSAGE_KEY_MarkOnOpenDetail))) {
-    s_mark_detail = t->value->int32 != 0;
     settings = true;
   }
   if (settings) {

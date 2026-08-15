@@ -263,7 +263,7 @@ function createClient(baseUrl, username, apiPass, opts) {
   function mapItem(item) {
     return {
       id: String(item.timestampUsec),
-      title: String(item.title || '(no title)').slice(0, 64),
+      title: String(item.title || '(no title)').slice(0, 80),
       feed: (item.origin && item.origin.title) || '',
       feedId: (item.origin && item.origin.streamId) || '',
       summary: stripHtml(item.summary && item.summary.content || '').slice(0, 140),
@@ -511,6 +511,39 @@ function createClient(baseUrl, username, apiPass, opts) {
   }
 
   /**
+   * Full text of one item: POST stream/items/contents with the item id as a
+   * single &i= parameter, then strip the HTML from items[0].summary.content.
+   * The FULL stripped text is returned (no length cap) — the watch renders
+   * it in the scrollable body.
+   */
+  function getSummary(id, cb) {
+    request('POST', base + API_BASE + '/reader/api/0/stream/items/contents',
+      'i=' + encodeURIComponent(String(id)), function (err, resp) {
+        if (err) {
+          cb(err);
+          return;
+        }
+        var parsed = null;
+        try {
+          parsed = JSON.parse(resp.text);
+        } catch (e) {
+          cb(makeError(2, 'Bad summary response'));
+          return;
+        }
+        var item = null;
+        if (parsed && parsed.items && parsed.items.length) {
+          item = parsed.items[0];
+        } else if (Array.isArray(parsed)) {
+          item = parsed[0];
+        } else {
+          item = parsed;
+        }
+        var html = (item && item.summary && item.summary.content) || '';
+        cb(null, stripHtml(html));
+      });
+  }
+
+  /**
    * Mark a batch of item ids read: one edit-tag POST with a repeated &i=
    * parameter per id. Success = HTTP 200 with an "OK" body.
    */
@@ -523,6 +556,16 @@ function createClient(baseUrl, username, apiPass, opts) {
         body += '&i=' + encodeURIComponent(id);
       }
     }
+    editTag(body, cb);
+  }
+
+  /**
+   * Mark one item unread: an edit-tag POST removing the read tag
+   * (r=.../read, so the item returns to the unread list). Success = HTTP 200
+   * with an "OK" body.
+   */
+  function markUnread(id, cb) {
+    var body = 'T=x&r=' + READ_TAG + '&i=' + encodeURIComponent(String(id));
     editTag(body, cb);
   }
 
@@ -623,8 +666,10 @@ function createClient(baseUrl, username, apiPass, opts) {
     ensureAuth: ensureAuth,
     getTree: getTree,
     getItems: getItems,
+    getSummary: getSummary,
     getUserInfo: getUserInfo,
     markRead: markRead,
+    markUnread: markUnread,
     star: star,
     markAllRead: markAllRead
   };

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0 — reading overhaul
+
+- **Auto mark as read** replaces the "on list"/"on detail" toggles: one
+  setting with Never / Immediately / 1s / 2s / 3s / 5s / 10s — the time an
+  article must be shown before it is marked read (watch sub-menu opens a
+  selector; persisted, default Immediately)
+- **SELECT toggles read/unread** on the current article and cancels the
+  pending auto-mark timer; long-press SELECT still toggles the star
+- **Sidebar icons**, always visible at the top of the (now full-height)
+  right bar: eye (white = unread, black = read), star (yellow = favourited,
+  black otherwise), M (accent on a black capsule when the article has
+  highlight-word matches, black otherwise); inactive icons are black
+- **Full text**: the heading renders the complete title (multi-line, never
+  truncated) and the summary is fetched in full on demand — the 140-char
+  preview streams with the article, the phone returns the whole text
+  (chunked over AppMessage into one heap buffer, shown in the scrollable
+  body) — nothing is shortened
+- **Layout**: the 2 px accent progress line sits at the very top of the
+  screen (above the black top bar, which now starts at y=2); the gap
+  between the top bar and the accent heading is gone; the heading text
+  stops before the sidebar
+- **Root menu**: the top row is now a black bar with accent dots
+- Emery ring trimmed 72 → 68 to keep `.text+.data+.bss` ≤ 65535 B after
+  the overhaul
+
 ## 0.2.4
 
 - **Startup crash — deep libc frames removed from the inbox path.** The

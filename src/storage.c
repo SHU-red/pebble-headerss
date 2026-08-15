@@ -10,8 +10,8 @@
 //   1  AccentColor (int32, 24-bit hex)
 //   2  DarkMode (int32)
 //   3  TouchEnabled (int32)
-//   4  MarkOnOpenList (int32)
-//   5  MarkOnOpenDetail (int32)
+//   4  (retired: MarkOnOpenList — removed in 0.3.0, replaced by MarkMode 14)
+//   5  (retired: MarkOnOpenDetail — removed in 0.3.0, replaced by MarkMode 14)
 //   6  UnreadOnly (int32)
 //   7  ImportantRow (int32, smart-surface toggle; default ON)
 //   8  NewDot (int32, smart-surface toggle; default ON)
@@ -21,6 +21,7 @@
 //   12 LastSeenCount (int32)
 //   13 HighlightWords (string CSV: comma-separated highlight words from Clay,
 //      max 10 entries of 32 bytes each, <= 340 B stored)
+//   14 MarkMode (int32: MarkMode enum, default MARK_NOW)
 //   20+i  Tree cache: FeedNode blob per node (<= 256 B each)
 //   100+i LastSeen: {char id[48]; int64_t seconds;} per feed (<= 256 B each)
 // ---------------------------------------------------------------------------
@@ -28,8 +29,10 @@
 #define PERSIST_KEY_ACCENT 1     // int32: 24-bit hex of the accent color
 #define PERSIST_KEY_DARK 2       // int32: 1 = dark theme
 #define PERSIST_KEY_TOUCH 3      // int32: 1 = native touch navigation
-#define PERSIST_KEY_MARK_LIST 4  // int32: 1 = mark read on open (timeline)
-#define PERSIST_KEY_MARK_DETAIL 5 // int32: 1 = mark read on open (detail)
+// Retired in 0.3.0 (replaced by PERSIST_KEY_MARK_MODE): kept only so
+// storage_load can sweep the stale flash entries on first run.
+#define PERSIST_KEY_MARK_LIST 4  // int32 (retired): MarkOnOpenList
+#define PERSIST_KEY_MARK_DETAIL 5 // int32 (retired): MarkOnOpenDetail
 #define PERSIST_KEY_UNREAD_ONLY 6 // int32: 1 = only fetch unread articles
 #define PERSIST_KEY_IMPORTANT 7  // int32: 1 = Important row in root menu
 #define PERSIST_KEY_NEWDOT 8     // int32: 1 = NEW-dot on unseen feeds
@@ -38,6 +41,7 @@
 #define PERSIST_KEY_TRIAGE 11    // int32: 1 = triage drain from Starred
 #define PERSIST_KEY_LASTSEEN_COUNT 12 // int32: number of last-seen entries
 #define PERSIST_KEY_HIGHLIGHT 13 // string CSV: highlight words (<= 340 B)
+#define PERSIST_KEY_MARK_MODE 14 // int32: MarkMode enum (default MARK_NOW)
 #define PERSIST_KEY_TREE_BASE 20  // + i: FeedNode blobs (<= 256 B each)
 #define PERSIST_KEY_LASTSEEN_BASE 100 // + i: last-seen entries (<= 256 B each)
 
@@ -57,13 +61,15 @@ static int s_last_seen_count;
 GColor s_accent;
 bool s_dark;
 bool s_touch;
-bool s_mark_list;
-bool s_mark_detail;
 bool s_unread_only;
 bool s_important;
 bool s_newdot;
 bool s_progress;
 bool s_triage;
+
+//! Auto-mark mode (see common.h MarkMode). Default MARK_NOW matches the old
+//! both-toggles-ON behavior; persisted at PERSIST_KEY_MARK_MODE.
+static int s_mark_mode = MARK_NOW;
 
 //! 24-bit RGB hex of a GColor8 (2-bit channels scaled up), for flash storage.
 static uint32_t accent_to_hex(GColor c) {
@@ -81,6 +87,26 @@ bool setting_important(void) { return s_important; }
 bool setting_triage(void) { return s_triage; }
 bool setting_newdot(void) { return s_newdot; }
 bool setting_progress(void) { return s_progress; }
+
+// ---------------------------------------------------------------------------
+// Auto-mark read mode (declared in common.h; persisted at key 14)
+// ---------------------------------------------------------------------------
+
+//! Current auto-mark mode; MARK_NOW when nothing valid is stored yet.
+int mark_mode(void) {
+  return s_mark_mode;
+}
+
+//! Set + persist a new mode, clamping anything outside the enum to MARK_NOW.
+void mark_mode_set(int mode) {
+  if (mode < MARK_NEVER || mode >= MARK_MODE_COUNT) {
+    mode = MARK_NOW;
+  }
+  if (s_mark_mode != mode) {
+    s_mark_mode = mode;
+    persist_write_int(PERSIST_KEY_MARK_MODE, mode);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Per-feed last-seen (NEW-dot support). A small id-keyed table persisted at
@@ -232,7 +258,7 @@ void storage_highlight_set_words(const char *csv) {
 // ---------------------------------------------------------------------------
 
 //! Load all settings from flash. Missing keys fall back to the defaults:
-//! cobalt blue accent, light theme, no touch navigation, mark-read toggles ON.
+//! cobalt blue accent, light theme, no touch navigation, MARK_NOW auto-mark.
 void storage_load(void) {
   uint32_t accent_hex = (uint32_t)persist_read_int(PERSIST_KEY_ACCENT);
   if (accent_hex <= 255) {
@@ -243,14 +269,21 @@ void storage_load(void) {
   // Dark theme is the app's look (Timeline-style); missing key = dark.
   s_dark = persist_exists(PERSIST_KEY_DARK) ? persist_read_int(PERSIST_KEY_DARK) != 0 : true;
   s_touch = persist_read_int(PERSIST_KEY_TOUCH) != 0;
-  // persist_read_int returns 0 for missing keys, which would read as OFF;
-  // the mark-read toggles default to ON for fresh installs.
-  s_mark_list = persist_exists(PERSIST_KEY_MARK_LIST)
-                    ? persist_read_int(PERSIST_KEY_MARK_LIST) != 0
-                    : true;
-  s_mark_detail = persist_exists(PERSIST_KEY_MARK_DETAIL)
-                      ? persist_read_int(PERSIST_KEY_MARK_DETAIL) != 0
-                      : true;
+  // Auto-mark mode: default MARK_NOW for fresh installs (the old
+  // both-toggles-ON default); clamp any persisted garbage to the enum range.
+  int mm = (int)persist_read_int(PERSIST_KEY_MARK_MODE);
+  if (mm < MARK_NEVER || mm >= MARK_MODE_COUNT) {
+    mm = MARK_NOW;
+  }
+  s_mark_mode = mm;
+  // Retire the 0.3.0-predecessor toggles: nothing reads keys 4/5 anymore,
+  // so drop the stale flash entries once.
+  if (persist_exists(PERSIST_KEY_MARK_LIST)) {
+    persist_delete(PERSIST_KEY_MARK_LIST);
+  }
+  if (persist_exists(PERSIST_KEY_MARK_DETAIL)) {
+    persist_delete(PERSIST_KEY_MARK_DETAIL);
+  }
   // "Unread only" defaults ON: read articles stay out of the server fetches.
   s_unread_only = persist_exists(PERSIST_KEY_UNREAD_ONLY)
                       ? persist_read_int(PERSIST_KEY_UNREAD_ONLY) != 0
@@ -301,8 +334,7 @@ void storage_save_settings(void) {
   persist_write_int(PERSIST_KEY_ACCENT, (int32_t)accent_to_hex(s_accent));
   persist_write_int(PERSIST_KEY_DARK, s_dark ? 1 : 0);
   persist_write_int(PERSIST_KEY_TOUCH, s_touch ? 1 : 0);
-  persist_write_int(PERSIST_KEY_MARK_LIST, s_mark_list ? 1 : 0);
-  persist_write_int(PERSIST_KEY_MARK_DETAIL, s_mark_detail ? 1 : 0);
+  persist_write_int(PERSIST_KEY_MARK_MODE, s_mark_mode);
   persist_write_int(PERSIST_KEY_UNREAD_ONLY, s_unread_only ? 1 : 0);
   persist_write_int(PERSIST_KEY_IMPORTANT, s_important ? 1 : 0);
   persist_write_int(PERSIST_KEY_NEWDOT, s_newdot ? 1 : 0);

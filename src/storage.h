@@ -13,8 +13,6 @@
 extern GColor s_accent;      // GColor8, default GColorCobaltBlue
 extern bool s_dark;
 extern bool s_touch;
-extern bool s_mark_list;     // "Mark read on open (list)" — watch sub-menu toggle
-extern bool s_mark_detail;   // "Mark read on open (detail)" — watch sub-menu toggle
 extern bool s_unread_only;   // "Unread only" — hide read articles from the server
 extern bool s_important;     // "Important row" — root menu special row (default ON)
 extern bool s_newdot;        // "NEW-dot" — unseen-feed marker (default ON)

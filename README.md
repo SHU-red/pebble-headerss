@@ -18,43 +18,48 @@ sidebar (read/unread dot + star).
   with articles newer than your last visit, feeds sorted by newest activity;
   open a folder to play **all articles recursively** or dive into a single
   feed
-- **Timeline reading view** — one article full screen: black top bar with the
-  folder/feed in accent, accent header bar (heading + feed·time), scrollable
-  summary body; scrolling past the bottom slides to the next article
-  (continuous two-page slide, 260 ms), scrolling up past the top goes back to
-  previously read articles; a static 2 px accent progress line in the top bar
-  shows position in the stream; a 26 px accent sidebar holds the read/unread
-  dot (filled = unread, outline = read) and the yellow star (long-press
-  SELECT toggles); empty streams show an "All caught up" checkmark screen
+- **Timeline reading view** — one article full screen: 2 px accent progress
+  line at the very top, black top bar with the stream name in accent, accent
+  heading bar with the FULL article heading (multi-line, never truncated)
+  + feed·time, scrollable summary body — the full summary is fetched on
+  demand (the phone streams the complete text, chunked) so nothing is ever
+  shortened; scrolling past the bottom slides to the next article
+  (continuous two-page slide, 260 ms), scrolling up past the top goes back
+  to previously read articles; a full-height accent sidebar holds three
+  always-visible icons: eye (white = unread, black = read), star
+  (yellow = favourited), M (lights up when highlight words match)
 - **Read through** — opening a stream shows the first article full screen;
-  scroll to the bottom (or press SELECT) to advance; articles are marked read
-  on becoming current (list toggle for the first, detail toggle for
-  advances); scroll up past the top to re-open articles marked read this
-  session
+  scroll to the bottom (or press DOWN) to advance, scroll up past the top to
+  go back; **SELECT toggles read/unread** (and cancels the auto-mark timer),
+  long-press SELECT stars; articles are marked read after being shown for
+  the configured time (see Auto mark read)
 - **Unread only** — watch toggle (sub-menu): hides read articles from the
   server for feed/folder streams; "All unread" always shows only unread
 - **Star** — long-press SELECT toggles the star; starred articles show a
-  yellow star icon
+  yellow star in the sidebar
 - **Word highlighting** — set up to 10 words/phrases in the phone settings;
   matches are accent + bold + underlined in the summary and white + bold +
   underlined in the heading (whole words, case-insensitive, hyphens count
-  as boundaries); updates live while reading
+  as boundaries); updates live while reading; the sidebar's M lights up on
+  articles with matches
 - **Per-feed actions** — long-press SELECT on a feed row: **Mark all read**
   (with confirm) or **Refresh** (re-fetch and open at the newest)
 - **Triage drain** — optional (sub-menu): inside Starred, advancing past an
   article un-stars it — star = keep, reading drains the list
-- **Modern look** — dark theme by default, accent color everywhere: accent
-  top strip on the root menu, permanent accent right spine in every menu,
-  unread counts as filled accent pills, accent-selected rows; reader = black
-  top bar with accent stream name, always-accent heading with black text,
-  icon sidebar for read state and star
-- **Settings** — UP on the top accent strip opens the watch sub-menu:
-  Refresh, Mark all read, Connection info (account + unread), reading
-  toggles, Unread only, Important row / NEW-dot / Progress line / Triage
-  drain toggles; the connection/appearance page lives in the phone app
-  settings (Clay): FreshRSS URL, username, API password, theme
-- **Lean** — 96-article window in RAM, live-only data, tree cached in flash
-  for instant start
+- **Modern look** — dark theme by default, accent color everywhere: black
+  top strip with accent dots on the root menu, permanent accent right spine
+  in every menu, unread counts as filled accent pills, accent-selected rows;
+  reader = 2 px accent progress line at the very top, black top bar with
+  accent stream name, always-accent heading with black text, full-height
+  icon sidebar (eye / star / M)
+- **Settings** — UP on the top black strip opens the watch sub-menu:
+  Refresh, Mark all read, Connection info (account + unread), **Auto mark
+  read** (Never / Immediately / 1s / 2s / 3s / 5s / 10s), Unread only,
+  Important row / NEW-dot / Progress line / Triage drain toggles; the
+  connection/appearance page lives in the phone app settings (Clay):
+  FreshRSS URL, username, API password, theme
+- **Lean** — bounded article window in RAM (68 on the Time 2, 56 on the
+  64 KB class), live-only data, tree cached in flash for instant start
 
 ## API
 

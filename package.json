@@ -1,7 +1,7 @@
 {
   "name": "pebble-headerss",
   "author": "SHU-red",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "keywords": [
     "pebble-app",
     "freshrss",
@@ -44,6 +44,7 @@
       "RequestConfig",
       "ResultCode",
       "ResultText",
+      "FetchSummary",
       "FeedCount",
       "FeedType",
       "FeedId",
@@ -70,7 +71,10 @@
       "TriageDrain",
       "NewDot",
       "ProgressLine",
-      "HighlightWords"
+      "HighlightWords",
+      "FullSummary",
+      "SummaryLast",
+      "MarkUnread"
     ],
     "resources": {
       "media": [

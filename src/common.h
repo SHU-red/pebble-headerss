@@ -22,10 +22,11 @@
 //! basalt-class platforms 64 KB — bigger window on the target watch keeps
 //! more read articles re-openable in a session.
 #if defined(PBL_PLATFORM_EMERY)
-// 72 (not 96): .text+.data+.bss must stay <= 65535 B (uint16 virtual_size)
-// and the 0.2.1 highlight engine added ~6 KB; 72 keeps an emery advantage
-// over the 64-article platforms while fitting the limit.
-#define MAX_ARTICLES 72
+// 68 (was 72): .text+.data+.bss must stay <= 65535 B (uint16 virtual_size).
+// The 0.3.0 reader overhaul (full title, sidebar icons, auto-mark timer,
+// full-summary assembly) pushed emery to 65512 B; 68 articles keeps a small
+// emery advantage over the 64-article platforms with ~1 KB of headroom.
+#define MAX_ARTICLES 68
 #elif defined(PBL_PLATFORM_GABBRO)
 #define MAX_ARTICLES 64
 #else
@@ -80,11 +81,41 @@ const char *highlight_word(int i);
 //! The normalized comma-separated word list ("" when none).
 const char *highlight_words_csv(void);
 
+// ---------------------------------------------------------------------------
+// Auto-mark read mode (0.3.0). Replaces the old MarkOnOpenList /
+// MarkOnOpenDetail watch toggles: one mode says how eagerly the reader marks
+// an opened article read. Persisted by storage.c (persist key 14); the
+// reader (timeline.c) polls mark_mode() and arms its dwell timer with
+// MARK_MODE_DELAY_MS[mode].
+// ---------------------------------------------------------------------------
+
+typedef enum {
+  MARK_NEVER = 0, // never auto-mark (manual SELECT toggle only)
+  MARK_NOW,       // mark as soon as an article opens (old both-toggles-ON default)
+  MARK_1S,
+  MARK_2S,
+  MARK_3S,
+  MARK_5S,
+  MARK_10S,
+} MarkMode;
+
+#define MARK_MODE_COUNT 7
+//! Selection-window labels (main.c), indexed by MarkMode.
+#define MARK_MODE_LABELS { "Never", "Immediately", "1s", "2s", "3s", "5s", "10s" }
+//! Dwell delay before auto-marking read, indexed by MarkMode (0 = immediately;
+//! MARK_NEVER disables auto-marking entirely).
+#define MARK_MODE_DELAY_MS { 0, 0, 1000, 2000, 3000, 5000, 10000 }
+
+//! Current auto-mark mode (default MARK_NOW); read by the timeline reader.
+int mark_mode(void);
+//! Persist a new auto-mark mode (clamped to the valid enum range).
+void mark_mode_set(int mode);
+
 //! One article in the timeline ring buffer (heading + summary — there is no
 //! separate detail view; the list IS the reader).
 typedef struct {
   char id[24];       // decimal microsecond id, kept as a string
-  char title[64];
+  char title[80];    // full article title (the header renders it multi-line, no cap)
   char feed[24];     // feed display name
   char feed_id[16];  // "feed/N"
   char summary[140]; // stripped summary text

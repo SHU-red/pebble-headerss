@@ -57,6 +57,8 @@ static char s_folder_id[48];
 static char s_folder_name[32];
 static Window *s_sub_window;
 static MenuLayer *s_sub_menu;
+static Window *s_mode_window; // auto-mark mode selection (sub-menu -> window)
+static MenuLayer *s_mode_menu;
 
 // Folder marker: a small right-pointing triangle (U+25B6 is not covered by
 // the system fonts), repositioned with gpath_move_to per draw.
@@ -69,6 +71,7 @@ static GPath *s_arrow_path;
 
 static void push_folder_window(const char *id, const char *name);
 static void push_submenu_window(void);
+static void push_mode_window(void);
 static void open_context_menu(const FeedNode *feed);
 
 // ---------------------------------------------------------------------------
@@ -369,6 +372,13 @@ void apply_settings(void) {
     menu_layer_set_normal_colors(s_sub_menu, theme_bg(), theme_fg());
     menu_layer_set_highlight_colors(s_sub_menu, s_accent, GColorBlack);
   }
+  if (s_mode_window) {
+    window_set_background_color(s_mode_window, theme_bg());
+  }
+  if (s_mode_menu) {
+    menu_layer_set_normal_colors(s_mode_menu, theme_bg(), theme_fg());
+    menu_layer_set_highlight_colors(s_mode_menu, s_accent, GColorBlack);
+  }
   timeline_apply_settings();
 }
 
@@ -515,11 +525,12 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
 
   if (row == 0) {
     // Accent strip: the UP entry row doubles as the app's color header.
-    graphics_context_set_fill_color(ctx, s_accent);
+    // Black bar with accent dots (inverted from the old solid-accent bar).
+    graphics_context_set_fill_color(ctx, GColorBlack);
     graphics_fill_rect(ctx, bounds, 0, GCornerNone);
     int16_t cx = bounds.size.w / 2;
     int16_t cy = bounds.size.h / 2;
-    graphics_context_set_fill_color(ctx, GColorBlack);
+    graphics_context_set_fill_color(ctx, s_accent);
     for (int i = -1; i <= 1; i++) {
       graphics_fill_circle(ctx, GPoint(cx + i * 6, cy), 2);
     }
@@ -833,14 +844,18 @@ static void push_folder_window(const char *id, const char *name) {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-menu (UP from the root): Refresh / Mark all read / Connection / the two
-// reading toggles / Unread only / the four smart-surface toggles — flat, no
-// submenus
+// Sub-menu (UP from the root): Refresh / Mark all read / Connection / Auto
+// mark read (opens the MarkMode selection window) / Unread only / the four
+// smart-surface toggles — flat, one submenu (the auto-mark window)
 // ---------------------------------------------------------------------------
+
+//! Mode labels for the "Auto mark read" row subtitle and the selection
+//! window, indexed by MarkMode (see MARK_MODE_LABELS in common.h).
+static const char *const s_mark_mode_labels[MARK_MODE_COUNT] = MARK_MODE_LABELS;
 
 static uint16_t sub_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
                                  void *callback_context) {
-  return 10;
+  return 9;
 }
 
 static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
@@ -858,21 +873,21 @@ static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell
     menu_cell_basic_draw(ctx, cell_layer, "Connection info",
                          "Show the connected account", NULL);
   } else if (cell_index->row == 3) {
-    menu_cell_basic_draw(ctx, cell_layer, "Mark read on list",
-                         s_mark_list ? "ON" : "OFF", NULL);
+    // Auto-mark mode: subtitle shows the current mode label.
+    const char *mode = mark_mode() >= MARK_NEVER && mark_mode() < MARK_MODE_COUNT
+                           ? s_mark_mode_labels[mark_mode()]
+                           : "?";
+    menu_cell_basic_draw(ctx, cell_layer, "Auto mark read", mode, NULL);
   } else if (cell_index->row == 4) {
-    menu_cell_basic_draw(ctx, cell_layer, "Mark read on detail",
-                         s_mark_detail ? "ON" : "OFF", NULL);
-  } else if (cell_index->row == 5) {
     menu_cell_basic_draw(ctx, cell_layer, "Unread only",
                          s_unread_only ? "ON" : "OFF", NULL);
-  } else if (cell_index->row == 6) {
+  } else if (cell_index->row == 5) {
     menu_cell_basic_draw(ctx, cell_layer, "Important row",
                          s_important ? "ON" : "OFF", NULL);
-  } else if (cell_index->row == 7) {
+  } else if (cell_index->row == 6) {
     menu_cell_basic_draw(ctx, cell_layer, "NEW-dot",
                          s_newdot ? "ON" : "OFF", NULL);
-  } else if (cell_index->row == 8) {
+  } else if (cell_index->row == 7) {
     menu_cell_basic_draw(ctx, cell_layer, "Progress line",
                          s_progress ? "ON" : "OFF", NULL);
   } else {
@@ -896,31 +911,23 @@ static void sub_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
     dialog_show_working("Loading");
     proto_request_user_info();
   } else if (cell_index->row == 3) {
-    s_mark_list = !s_mark_list;
-    storage_save_settings();
-    vibes_short_pulse();
-    menu_layer_reload_data(menu_layer);
+    push_mode_window();
   } else if (cell_index->row == 4) {
-    s_mark_detail = !s_mark_detail;
-    storage_save_settings();
-    vibes_short_pulse();
-    menu_layer_reload_data(menu_layer);
-  } else if (cell_index->row == 5) {
     s_unread_only = !s_unread_only;
     storage_save_settings();
     vibes_short_pulse();
     menu_layer_reload_data(menu_layer);
-  } else if (cell_index->row == 6) {
+  } else if (cell_index->row == 5) {
     s_important = !s_important;
     storage_save_settings();
     vibes_short_pulse();
     menu_layer_reload_data(menu_layer);
-  } else if (cell_index->row == 7) {
+  } else if (cell_index->row == 6) {
     s_newdot = !s_newdot;
     storage_save_settings();
     vibes_short_pulse();
     menu_layer_reload_data(menu_layer);
-  } else if (cell_index->row == 8) {
+  } else if (cell_index->row == 7) {
     s_progress = !s_progress;
     storage_save_settings();
     vibes_short_pulse();
@@ -957,13 +964,106 @@ static void sub_window_unload(Window *window) {
   s_sub_window = NULL;
 }
 
+static void sub_window_appear(Window *window) {
+  // The auto-mark label may have changed in the mode window underneath.
+  menu_layer_reload_data(s_sub_menu);
+}
+
 static void push_submenu_window(void) {
   s_sub_window = window_create();
   window_set_window_handlers(s_sub_window, (WindowHandlers){
     .load = sub_window_load,
+    .appear = sub_window_appear,
     .unload = sub_window_unload,
   });
   window_stack_push(s_sub_window, true);
+}
+
+// ---------------------------------------------------------------------------
+// Auto-mark mode window (opened from the sub-menu "Auto mark read" row): a
+// 7-row selection list over the MarkMode enum, folder-window style. SELECT
+// picks the highlighted mode (persisted via mark_mode_set, then pops);
+// BACK pops without changing anything.
+// ---------------------------------------------------------------------------
+
+static uint16_t mode_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
+                                  void *callback_context) {
+  return MARK_MODE_COUNT;
+}
+
+static int16_t mode_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index,
+                                    void *callback_context) {
+  return 44;
+}
+
+static void mode_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
+                          void *callback_context) {
+  GRect b = layer_get_bounds(cell_layer);
+  bool selected = menu_layer_is_index_selected(s_mode_menu, (MenuIndex *)cell_index);
+  bool current = (int)cell_index->row == mark_mode();
+
+  graphics_context_set_fill_color(ctx, selected ? s_accent : theme_bg());
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  draw_spine(ctx, b, selected);
+
+  graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_fg());
+  graphics_draw_text(ctx, s_mark_mode_labels[cell_index->row],
+                     fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                     GRect(8, (b.size.h - 22) / 2, b.size.w - 40, 22),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+
+  if (current) {
+    // Checkmark on the active mode (drawn in the inverted row color).
+    GPoint mid = GPoint(b.size.w - 22, b.size.h / 2);
+    graphics_context_set_stroke_color(ctx, selected ? GColorBlack : s_accent);
+    graphics_draw_line(ctx, GPoint(mid.x - 5, mid.y + 1), GPoint(mid.x - 1, mid.y + 5));
+    graphics_draw_line(ctx, GPoint(mid.x - 1, mid.y + 5), GPoint(mid.x + 6, mid.y - 3));
+  }
+}
+
+static void mode_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
+                           void *callback_context) {
+  mark_mode_set((int)cell_index->row);
+  vibes_short_pulse();
+  if (s_mode_window) {
+    window_stack_remove(s_mode_window, true);
+  }
+}
+
+static void mode_window_load(Window *window) {
+  Layer *root = window_get_root_layer(window);
+  GRect bounds = layer_get_bounds(root);
+
+  window_set_background_color(window, theme_bg());
+
+  s_mode_menu = menu_layer_create(bounds);
+  menu_layer_set_callbacks(s_mode_menu, NULL, (MenuLayerCallbacks){
+    .get_num_rows = mode_get_num_rows,
+    .get_cell_height = mode_get_cell_height,
+    .draw_row = mode_draw_row,
+    .select_click = mode_select_cb,
+  });
+  menu_layer_set_click_config_onto_window(s_mode_menu, window);
+  menu_layer_pad_bottom_enable(s_mode_menu, true);
+  menu_layer_set_normal_colors(s_mode_menu, theme_bg(), theme_fg());
+  menu_layer_set_highlight_colors(s_mode_menu, s_accent, GColorBlack);
+  layer_add_child(root, menu_layer_get_layer(s_mode_menu));
+}
+
+static void mode_window_unload(Window *window) {
+  menu_layer_destroy(s_mode_menu);
+  s_mode_menu = NULL;
+  window_destroy(s_mode_window);
+  s_mode_window = NULL;
+}
+
+static void push_mode_window(void) {
+  s_mode_window = window_create();
+  window_set_window_handlers(s_mode_window, (WindowHandlers){
+    .load = mode_window_load,
+    .unload = mode_window_unload,
+  });
+  window_stack_push(s_mode_window, true);
 }
 
 // ---------------------------------------------------------------------------

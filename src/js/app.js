@@ -10,12 +10,14 @@
  * Wire protocol (messageKeys in package.json):
  *   watch->phone: FetchTree | FetchItems(+ItemStream/ItemCont/FetchN) |
  *     FetchUserInfo | MarkRead (CSV ids) | StarItem(+StarOn) | MarkAllRead |
- *     RequestConfig
+ *     RequestConfig | FetchSummary (article id) | MarkUnread (article id)
  *   phone->watch: ResultCode/ResultText (0 = success), FeedCount + per-node
  *     FeedType/FeedId/FeedName/FeedUnread/FeedNewest/FeedParent, ItemCount
  *     (+FeedNewest = newest article timestampUsec of the page) + per-item
  *     ItemId/ItemTitle/ItemFeed/ItemFeedId/ItemSummary/ItemTime/ItemRead/
- *     ItemStar, ItemCont (page continuation).
+ *     ItemStar, ItemCont (page continuation), FullSummary (<=3000-char
+ *     chunk) + SummaryLast (1 = final chunk, also sent alone on error to
+ *     unblock the watch).
  *
  * Clay auto-handles the config webview: on save it writes 'clay-settings'
  * for page prefill and sends every watch-bound messageKey value (AccentColor,
@@ -92,6 +94,7 @@ Pebble.addEventListener('webviewclosed', function (e) {
 // is dropped instead of interleaving with the newer one.
 var treeGeneration = 0;
 var itemsGeneration = 0;
+var summaryGeneration = 0;
 
 /**
  * Normalize a stored server URL: trim whitespace, strip a stray trailing
@@ -393,6 +396,140 @@ function sendItemCont(cont, generation) {
   });
 }
 
+// Full-summary streaming: chunks are capped at 3000 chars (and 3800 UTF-8
+// bytes, keeping each message inside the watch's 4096 B inbound buffer),
+// split at a whitespace boundary when one is available. Splits are allowed
+// to be UTF-8-unsafe — the watch stores raw bytes.
+var SUMMARY_CHUNK_MAX_CHARS = 3000;
+var SUMMARY_CHUNK_MAX_BYTES = 3800;
+
+/**
+ * Split a full summary into wire-sized chunks. Each chunk ends at the last
+ * whitespace within the limits (lossless — the whitespace stays in the
+ * chunk) or, when a run has no whitespace, at a hard char/byte bound.
+ * @param {string} text
+ * @return {Array<string>} at least one entry ([''] for empty text)
+ */
+function splitSummary(text) {
+  var s = String(text || '');
+  var chunks = [];
+  var len = s.length;
+  var start = 0;
+  var chars = 0;
+  var bytes = 0;
+  var lastSpace = -1; // index just past the last whitespace in this chunk
+  var i = 0;
+  while (i < len) {
+    var code = s.charCodeAt(i);
+    var inc = 1;
+    var byteLen;
+    if (code < 0x80) {
+      byteLen = 1;
+    } else if (code < 0x800) {
+      byteLen = 2;
+    } else if (code >= 0xD800 && code <= 0xDBFF && i + 1 < len &&
+               s.charCodeAt(i + 1) >= 0xDC00 && s.charCodeAt(i + 1) <= 0xDFFF) {
+      byteLen = 4;
+      inc = 2;
+    } else {
+      byteLen = 3;
+    }
+    if (chars + 1 > SUMMARY_CHUNK_MAX_CHARS ||
+        bytes + byteLen > SUMMARY_CHUNK_MAX_BYTES) {
+      var end = (lastSpace > start) ? lastSpace : i;
+      if (end <= start) {
+        end = i; // hard split at the byte/char bound
+      }
+      chunks.push(s.slice(start, end));
+      start = end;
+      chars = 0;
+      bytes = 0;
+      lastSpace = -1;
+      i = end;
+      continue;
+    }
+    if (/\s/.test(s.charAt(i))) {
+      lastSpace = i + inc;
+    }
+    chars += 1;
+    bytes += byteLen;
+    i += inc;
+  }
+  if (start < len) {
+    chunks.push(s.slice(start));
+  } else if (chunks.length === 0) {
+    chunks.push('');
+  }
+  return chunks;
+}
+
+/**
+ * Send one FullSummary chunk, then the next, chained on ack; after the last
+ * chunk a {SummaryLast: 1} finalizes the article on the watch. An empty
+ * chunk list (empty or failed summary) sends the bare SummaryLast.
+ * @param {Array<string>} chunks
+ * @param {number} index
+ * @param {number} generation - summary generation; a stale chain aborts
+ */
+function sendSummaryChunks(chunks, index, generation) {
+  if (generation !== summaryGeneration) {
+    return;
+  }
+  if (index >= chunks.length) {
+    var done = {};
+    done.SummaryLast = 1;
+    Pebble.sendAppMessage(done, function () {
+      console.log('summary: sent SummaryLast');
+    }, function (err) {
+      console.log('summary: failed to send SummaryLast: ' + JSON.stringify(err));
+    });
+    return;
+  }
+  var dict = {};
+  dict.FullSummary = chunks[index];
+  Pebble.sendAppMessage(dict, function () {
+    sendSummaryChunks(chunks, index + 1, generation);
+  }, function (err) {
+    console.log('summary: failed to send chunk ' + index + ': ' + JSON.stringify(err));
+  });
+}
+
+/**
+ * Fetch one article's full summary, then stream it to the watch as
+ * FullSummary chunks ended by SummaryLast. On any failure the watch is
+ * unblocked with a bare {SummaryLast: 1} plus a ResultCode/ResultText error.
+ * @param {string} id - decimal µs article id
+ */
+function summaryFlow(id) {
+  var client = makeClient();
+  if (!client) {
+    sendResult(1, 'Set server in phone settings');
+    return;
+  }
+  var generation = ++summaryGeneration;
+  client.getSummary(String(id || ''), function (err, text) {
+    if (generation !== summaryGeneration) {
+      return; // superseded by a newer fetch
+    }
+    if (err) {
+      sendResult(err.code, err.text);
+      var done = {};
+      done.SummaryLast = 1;
+      Pebble.sendAppMessage(done, function () {
+        // best effort — unblocks the watch's "Loading full text..."
+      }, function (e2) {
+        console.log('summary: failed to send error SummaryLast: ' + JSON.stringify(e2));
+      });
+      return;
+    }
+    var chunks = splitSummary(text);
+    if (chunks.length === 1 && chunks[0] === '') {
+      chunks = []; // empty summary: bare SummaryLast, no FullSummary chunk
+    }
+    sendSummaryChunks(chunks, 0, generation);
+  });
+}
+
 /**
  * Mark a CSV list of item ids read, then report the result.
  * @param {string} csv - comma-separated decimal µs ids (<= 12 per message)
@@ -412,6 +549,25 @@ function markReadFlow(csv) {
     }
   }
   client.markRead(ids, function (err) {
+    if (err) {
+      sendResult(err.code, err.text);
+      return;
+    }
+    sendResult(0, 'OK');
+  });
+}
+
+/**
+ * Mark one item unread (remove the read tag), then report the result.
+ * @param {string} id - decimal µs article id
+ */
+function markUnreadFlow(id) {
+  var client = makeClient();
+  if (!client) {
+    sendResult(1, 'Set server in phone settings');
+    return;
+  }
+  client.markUnread(String(id || ''), function (err) {
     if (err) {
       sendResult(err.code, err.text);
       return;
@@ -626,10 +782,24 @@ Pebble.addEventListener('appmessage', function (e) {
     return;
   }
 
+  var fetchSummary = payloadValue(payload, 'FetchSummary');
+  if (fetchSummary !== undefined && fetchSummary !== null && fetchSummary !== '') {
+    console.log('appmessage: fetching full summary');
+    summaryFlow(String(fetchSummary));
+    return;
+  }
+
   var markRead = payloadValue(payload, 'MarkRead');
   if (markRead !== undefined && markRead !== null && markRead !== '') {
     console.log('appmessage: marking read');
     markReadFlow(String(markRead));
+    return;
+  }
+
+  var markUnread = payloadValue(payload, 'MarkUnread');
+  if (markUnread !== undefined && markUnread !== null && markUnread !== '') {
+    console.log('appmessage: marking unread');
+    markUnreadFlow(String(markUnread));
     return;
   }
 
