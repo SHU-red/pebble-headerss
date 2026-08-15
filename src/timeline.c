@@ -22,7 +22,7 @@
 #define TOP_BAR_H 24      // black top bar with the stream name (starts y=2)
 #define DIVIDER_H 2       // accent divider line under the top bar (y=26..28)
 #define SIDEBAR_W 26      // thick accent sidebar holding the icons
-#define HEADER_META_H 22  // feed·time line + padding below the heading
+#define HEADER_META_H 18  // feed·time line + padding below the heading
 
 // Sidebar icons: monochrome (inactive = black, active = white — except the
 // highlight M, which uses the shared alarm color), stacked at the top of the
@@ -73,6 +73,7 @@ static Layer *s_top_bar;   // black bar, accent text (static)
 static Layer *s_divider;   // thin accent line under the top bar
 static TextLayer *s_top_text;
 static Layer *s_sidebar;   // accent bar with the eye/star/M icons
+static AppTimer *s_clock_timer; // 1-minute tick: redraws the sidebar clock
 static TextLayer *s_status;   // full-screen "Loading..." / "All caught up"
 static Layer *s_status_check; // accent GPath check above the status text
 static TextLayer *s_status_hint; // small hint under the status text
@@ -312,6 +313,15 @@ static void divider_update(Layer *layer, GContext *ctx) {
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 }
 
+//! Once a minute: redraw the sidebar so the clock chip shows the new time.
+static void clock_tick_cb(void *data) {
+  s_clock_timer = NULL;
+  if (s_sidebar) {
+    layer_mark_dirty(s_sidebar);
+  }
+  s_clock_timer = app_timer_register(60000, clock_tick_cb, NULL);
+}
+
 //! Accent sidebar (full screen height, y = 0..s_win_h) holding three
 //! indicators VERTICALLY CENTERED beside the SELECT button, in the order
 //! star, circle, magnifier: favourite star (orange = starred, black = not),
@@ -322,6 +332,28 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, s_accent);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
+
+  // 2-row clock in the sidebar's otherwise-wasted top: hours over minutes,
+  // accent digits on a black rounded chip.
+  int16_t ccx = b.size.w / 2;
+  time_t now = time(NULL);
+  struct tm *lt = localtime(&now);
+  if (lt) {
+    char tbuf[4];
+    graphics_context_set_fill_color(ctx, GColorBlack);
+    graphics_fill_rect(ctx, GRect(ccx - 11, 6, 22, 42), 4, GCornersAll);
+    graphics_context_set_text_color(ctx, s_accent);
+    snprintf(tbuf, sizeof(tbuf), "%d", lt->tm_hour);
+    graphics_draw_text(ctx, tbuf, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                       GRect(ccx - 11, 7, 22, 20),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
+                       NULL);
+    snprintf(tbuf, sizeof(tbuf), "%02d", lt->tm_min);
+    graphics_draw_text(ctx, tbuf, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                       GRect(ccx - 11, 27, 22, 20),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
+                       NULL);
+  }
 
   const Article *a = current_article();
   if (!a) {
@@ -909,12 +941,12 @@ static void body_update(Layer *layer, GContext *ctx) {
 //! "Loading full text..." hint when a fetch is in flight.
 static void page_resize(Page *p) {
   int16_t hh = (int16_t)(p->head_layout.height + HEADER_META_H);
-  int16_t body_h = p->body_layout.height + 6; // 2 px pad + 4 px air
+  int16_t body_h = p->body_layout.height + 4; // 2 px pad + 2 px air
   if (p->idx == s_full_idx && s_full_fetching && !s_full_done) {
     body_h += FULL_HINT_H;
   }
   layer_set_frame(p->header, GRect(0, 0, s_win_w, hh));
-  layer_set_frame(p->body, GRect(4, hh + 2, s_win_w - SIDEBAR_W - 8, body_h));
+  layer_set_frame(p->body, GRect(4, hh + 1, s_win_w - SIDEBAR_W - 8, body_h));
   int32_t total = hh + 2 + body_h;
   GSize content = scroll_layer_get_content_size(p->scroll);
   if (content.h != total) {
@@ -1488,6 +1520,16 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
     maybe_advance();
     return;
   }
+  // The chrome is tight now: near-fit articles (content up to ~8 px over the
+  // viewport — a sub-perceptual sliver of the last line) advance on ONE
+  // press instead of performing an invisible 8 px scroll. Genuinely long
+  // text (a full line or more over) keeps the visible page-scroll.
+  if (content.h <= frame.size.h + 8) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "nav: fits (cont=%d frame=%d), advance",
+            content.h, frame.size.h);
+    maybe_advance();
+    return;
+  }
   // Page-down: ~3/4 viewport per press (a small overlap keeps the previous
   // screen's last line visible for context); the final press lands exactly
   // on the bottom so the last word is clearly visible.
@@ -1680,6 +1722,7 @@ static void timeline_window_load(Window *window) {
   s_sidebar = layer_create(GRect(s_win_w - SIDEBAR_W, 0, SIDEBAR_W, s_win_h));
   layer_set_update_proc(s_sidebar, sidebar_update);
   layer_add_child(root, s_sidebar);
+  s_clock_timer = app_timer_register(60000, clock_tick_cb, NULL);
 
   window_set_click_config_provider(window, timeline_click_config_provider);
 
@@ -1691,6 +1734,10 @@ static void timeline_window_load(Window *window) {
 //! and release the layer pointers.
 static void timeline_close(void) {
   mark_timer_cancel(); // the pending auto-mark must not fire on dead pages
+  if (s_clock_timer) {
+    app_timer_cancel(s_clock_timer);
+    s_clock_timer = NULL;
+  }
   full_summary_reset(); // free the assembled full text
   transition_watchdog_cancel();
   proto_flush_now();
