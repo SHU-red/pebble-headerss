@@ -110,20 +110,6 @@ void proto_request_items(const char *stream, const char *cont) {
   }
 }
 
-//! Ask for the stripped HTML summary of one article.
-void proto_request_summary(const char *id) {
-  DictionaryIterator *iter;
-  AppMessageResult res = app_message_outbox_begin(&iter);
-  if (res == APP_MSG_OK) {
-    dict_write_int32(iter, MESSAGE_KEY_FetchSummary, 1);
-    dict_write_cstring(iter, MESSAGE_KEY_ItemId, id ? id : "");
-    res = app_message_outbox_send();
-  }
-  if (res != APP_MSG_OK) {
-    APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchSummary (%d)", (int)res);
-  }
-}
-
 //! Toggle the star flag of one article on the server.
 void proto_star(const char *id, bool on) {
   DictionaryIterator *iter;
@@ -224,12 +210,6 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     return;
   }
   if (item) {
-    return;
-  }
-
-  // Summary response: ItemSummary + ItemId echo.
-  if ((t = dict_find(iter, MESSAGE_KEY_ItemSummary))) {
-    timeline_summary_arrived(iter);
     return;
   }
 

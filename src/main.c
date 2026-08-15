@@ -8,11 +8,11 @@
 
 // ---------------------------------------------------------------------------
 // HeadeRSS — watchapp (C side). FreshRSS feed reader via the phone-side JS
-// bridge (GReader API). The watch has no network: every feed tree, item page
-// and summary arrives over AppMessage; mark-read/star are batched and sent
+// bridge (GReader API). The watch has no network: every feed tree and item
+// page arrives over AppMessage; mark-read/star are batched and sent
 // back. Windows: root menu (tree root), folder menus, the Timeline reading
-// view, the article detail card, the settings sub-menu and the shared result
-// dialog — all mirroring the launcher's idioms.
+// view (heading + summary rows, no detail view), the settings sub-menu and
+// the shared result dialog — all mirroring the launcher's idioms.
 // ---------------------------------------------------------------------------
 
 #define READING_LIST_STREAM "user/-/state/com.google/reading-list"

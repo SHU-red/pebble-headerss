@@ -4,9 +4,10 @@
 #include <pebble.h>
 
 // ---------------------------------------------------------------------------
-// Timeline reading view: a native-Timeline-style list (accent bar, dots,
-// pin notch, star markers) over a ring buffer of article headings, plus the
-// article detail card with a single-slot summary cache.
+// Timeline reading view: a native-Timeline-style list (accent spine, dots,
+// pin notch, animated selection wash, star markers) over a ring buffer of
+// article headings + summaries. No detail view — rows always show heading
+// and summary.
 // ---------------------------------------------------------------------------
 
 //! Open (or reset and re-open) the timeline for a stream; requests page 1.
@@ -16,9 +17,8 @@ void timeline_open(const char *stream, const char *title);
 void timeline_page_begin(int32_t n);
 void timeline_collect_article(DictionaryIterator *iter);
 void timeline_page_end(const char *cont);
-void timeline_summary_arrived(DictionaryIterator *iter);
 
-//! Re-apply accent/theme to the timeline + detail windows (from settings).
+//! Re-apply accent/theme to the timeline window (from settings).
 void timeline_apply_settings(void);
 
 #endif

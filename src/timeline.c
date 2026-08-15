@@ -1,21 +1,24 @@
 #include <pebble.h>
 
-#include "timeline.h"
-#include "storage.h"
-#include "proto.h"
-#include "tree.h"
 #include "common.h"
+#include "storage.h"
+#include "tree.h"
+#include "proto.h"
+#include "timeline.h"
 
 // ---------------------------------------------------------------------------
-// Timeline reading view (see timeline.h). Article headings stream in from
-// the phone into a ring buffer; pages are dropped from the head when the
-// buffer fills and re-fetched via continuation. The visual centerpiece is a
-// native-Timeline-style list: a permanent accent bar on the right edge, one
-// dot per entry on the bar (accent = unread, muted = read), a filled star
-// for starred entries, and a pin notch on the selected row.
+// Timeline reading view (see timeline.h). Article headings + summaries
+// stream in from the phone into a ring buffer; pages are dropped from the
+// head when the buffer fills and re-fetched via continuation. The visual
+// centerpiece is a native-Timeline-style list: a permanent accent spine on
+// the right edge, one dot per entry on the spine (accent = unread, muted =
+// read), a yellow star on starred entries, and on the selected row an
+// accent wash + pin notch + popping dot. There is no detail view — every
+// row always shows heading + summary.
 // ---------------------------------------------------------------------------
 
 #define TIMELINE_HEADER_H 26 // custom title bar (SDK3 has no window title)
+#define SPINE_W 4            // accent spine width
 
 static Article s_articles[MAX_ARTICLES];
 static int32_t s_count;
@@ -28,46 +31,135 @@ static char s_title[24];
 static Window *s_tl_window;
 static MenuLayer *s_tl_menu;
 static TextLayer *s_tl_header;
+static Layer *s_tl_underline; // 2px accent underline under the header
 static bool s_tl_visible;
 
-// Shared draw paths: a 5-point star (10 vertices, ~8 px) and the pin notch
-// (right-pointing triangle, 10x8). Repositioned per row with gpath_move_to.
+// Shared draw paths: a 5-point star (~12 px) and the pin notch
+// (right-pointing triangle, 9x10). Repositioned per row with gpath_move_to.
 static const GPathInfo STAR_PATH_INFO = {
   .num_points = 10,
-  .points = (GPoint[]) {
-    { 0, -4 }, { -1, 2 }, { -4, 1 }, { -2, -1 }, { -2, -3 },
-    { 0, -2 }, { 2, -3 }, { 2, -1 }, { 4, 1 }, { 1, 2 },
+  .points = (GPoint[10]){
+    { 0, -6 }, { 2, -2 }, { 6, -2 }, { 3, 1 }, { 4, 6 },
+    { 0, 3 }, { -4, 6 }, { -3, 1 }, { -6, -2 }, { -2, -2 },
   },
 };
-
 static const GPathInfo PIN_PATH_INFO = {
   .num_points = 3,
-  .points = (GPoint[]) { { 0, 0 }, { -10, -4 }, { -10, 4 } },
+  .points = (GPoint[3]){ { 0, -5 }, { 9, 0 }, { 0, 5 } }, // apex right, at the spine
 };
 
 static GPath *s_star_path;
 static GPath *s_pin_path;
 
 // ---------------------------------------------------------------------------
-// Article detail window: title + feed·time header over a scrolling summary.
-// The summary is a single-slot cache (id + text) so revisits don't re-fetch.
+// Selected-row animations: the accent wash tint (GColor8 lerp, launcher
+// idiom) and the dot pop (radius). Both are plain AnimationImplementations
+// marking the menu dirty per frame — no float math.
 // ---------------------------------------------------------------------------
 
-static Window *s_detail_window;
-static TextLayer *s_detail_title;
-static TextLayer *s_detail_meta;
-static ScrollLayer *s_detail_scroll;
-static TextLayer *s_summary_text;
-static int32_t s_detail_idx;
-static char s_summary_id[24];
-static char s_summary[300];
+static GColor s_tint_cur;
+static GColor s_tint_from;
+static GColor s_tint_to;
+static Animation *s_tint_anim;
+static int16_t s_dot_cur; // selected dot radius
+static int16_t s_dot_from;
+static int16_t s_dot_to;
+static Animation *s_dot_anim;
 
-static void detail_open(int32_t idx);
-static void detail_render(void);
-static void article_mark_read(int32_t idx);
-static void detail_select_click(ClickRecognizerRef rec, void *ctx);
-static void detail_star_long_click(ClickRecognizerRef rec, void *ctx);
-static void detail_back_click(ClickRecognizerRef rec, void *ctx);
+//! GColor8 channel lerp (the 2-bit channels interpolate per frame).
+static GColor color8_lerp(GColor from, GColor to, uint32_t num, uint32_t den) {
+  if (den == 0) {
+    return to;
+  }
+  GColor c = GColorFromRGB(
+      (uint8_t)(from.r + (((int16_t)to.r - from.r) * (int16_t)num) / (int16_t)den),
+      (uint8_t)(from.g + (((int16_t)to.g - from.g) * (int16_t)num) / (int16_t)den),
+      (uint8_t)(from.b + (((int16_t)to.b - from.b) * (int16_t)num) / (int16_t)den));
+  c.a = from.a;
+  return c;
+}
+
+//! Accent washed toward the theme background — the selection wash color.
+static GColor selection_tint(void) {
+  return color8_lerp(s_accent, theme_bg(), 164, 200);
+}
+
+static void tint_anim_update(Animation *anim, const AnimationProgress progress) {
+  s_tint_cur = color8_lerp(s_tint_from, s_tint_to, progress, ANIMATION_NORMALIZED_MAX);
+  if (s_tl_menu) {
+    layer_mark_dirty(menu_layer_get_layer(s_tl_menu));
+  }
+}
+
+static void tint_anim_stopped(Animation *anim, bool finished, void *context) {
+  if (anim != s_tint_anim) {
+    return; // superseded by a newer animation
+  }
+  s_tint_anim = NULL;
+  s_tint_cur = s_tint_to;
+  if (s_tl_menu) {
+    layer_mark_dirty(menu_layer_get_layer(s_tl_menu));
+  }
+}
+
+static const AnimationImplementation TINT_ANIM_IMPL = {
+  .update = tint_anim_update,
+};
+
+static void dot_anim_update(Animation *anim, const AnimationProgress progress) {
+  s_dot_cur = s_dot_from +
+              (int16_t)(((int32_t)(s_dot_to - s_dot_from) * (int32_t)progress) /
+                        (int32_t)ANIMATION_NORMALIZED_MAX);
+  if (s_tl_menu) {
+    layer_mark_dirty(menu_layer_get_layer(s_tl_menu));
+  }
+}
+
+static void dot_anim_stopped(Animation *anim, bool finished, void *context) {
+  if (anim != s_dot_anim) {
+    return;
+  }
+  s_dot_anim = NULL;
+  s_dot_cur = s_dot_to;
+  if (s_tl_menu) {
+    layer_mark_dirty(menu_layer_get_layer(s_tl_menu));
+  }
+}
+
+static const AnimationImplementation DOT_ANIM_IMPL = {
+  .update = dot_anim_update,
+};
+
+//! Kick both selection animations off (tint wash 220 ms, dot pop 180 ms).
+static void selection_animate(void) {
+  if (s_tint_anim) {
+    animation_unschedule(s_tint_anim);
+  }
+  s_tint_from = s_tint_cur;
+  s_tint_to = selection_tint();
+  s_tint_anim = animation_create();
+  animation_set_duration(s_tint_anim, 220);
+  animation_set_curve(s_tint_anim, AnimationCurveEaseInOut);
+  animation_set_implementation(s_tint_anim, &TINT_ANIM_IMPL);
+  animation_set_handlers(s_tint_anim, (AnimationHandlers){
+    .stopped = tint_anim_stopped,
+  }, NULL);
+  animation_schedule(s_tint_anim);
+
+  if (s_dot_anim) {
+    animation_unschedule(s_dot_anim);
+  }
+  s_dot_from = s_dot_cur;
+  s_dot_to = 4;
+  s_dot_anim = animation_create();
+  animation_set_duration(s_dot_anim, 180);
+  animation_set_curve(s_dot_anim, AnimationCurveEaseOut);
+  animation_set_implementation(s_dot_anim, &DOT_ANIM_IMPL);
+  animation_set_handlers(s_dot_anim, (AnimationHandlers){
+    .stopped = dot_anim_stopped,
+  }, NULL);
+  animation_schedule(s_dot_anim);
+}
 
 // ---------------------------------------------------------------------------
 // Small formatters
@@ -75,8 +167,8 @@ static void detail_back_click(ClickRecognizerRef rec, void *ctx);
 
 //! Compact relative time: "now", "5m", "3h", "2d", else "dd.mm.".
 static void format_reltime(char *buf, size_t len, int32_t published) {
-  int32_t now = (int32_t)time(NULL);
-  int32_t diff = now - published;
+  time_t now = time(NULL);
+  int32_t diff = (int32_t)(now - published);
   if (diff < 0) {
     diff = 0;
   }
@@ -86,25 +178,15 @@ static void format_reltime(char *buf, size_t len, int32_t published) {
     snprintf(buf, len, "%ldm", (long)(diff / 60));
   } else if (diff < 86400) {
     snprintf(buf, len, "%ldh", (long)(diff / 3600));
-  } else if (diff < 604800) {
-    snprintf(buf, len, "%ldd", (long)(diff / 86400));
+  } else if (diff < 172800) {
+    snprintf(buf, len, "2d");
   } else {
-    struct tm *lt = localtime(&published);
-    if (lt) {
-      strftime(buf, len, "%d.%m.", lt);
+    struct tm *tm = localtime(&published);
+    if (tm) {
+      snprintf(buf, len, "%02d.%02d.", tm->tm_mday, tm->tm_mon + 1);
     } else {
-      snprintf(buf, len, "%s", "");
+      snprintf(buf, len, "?");
     }
-  }
-}
-
-//! Absolute date+time for the detail card: "dd.mm. hh:mm".
-static void format_datetime(char *buf, size_t len, int32_t published) {
-  struct tm *lt = localtime(&published);
-  if (lt) {
-    strftime(buf, len, "%d.%m. %H:%M", lt);
-  } else {
-    snprintf(buf, len, "%s", "");
   }
 }
 
@@ -113,48 +195,63 @@ static void format_datetime(char *buf, size_t len, int32_t published) {
 // ---------------------------------------------------------------------------
 
 static void timeline_prefetch_check(void);
+static void article_mark_read(int32_t idx);
+
+static void timeline_selection_changed(void) {
+  selection_animate();
+  timeline_prefetch_check();
+}
 
 static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
   MenuIndex idx = menu_layer_get_selected_index(s_tl_menu);
   if (idx.row > 0) {
     idx.row--;
     menu_layer_set_selected_index(s_tl_menu, idx, MenuRowAlignCenter, true);
-    timeline_prefetch_check();
+    timeline_selection_changed();
   }
 }
 
 static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   MenuIndex idx = menu_layer_get_selected_index(s_tl_menu);
-  uint16_t rows = (uint16_t)(s_count > 0 ? s_count : 1);
-  if (idx.row + 1 < rows) {
+  if (idx.row + 1 < (uint16_t)s_count) {
     idx.row++;
     menu_layer_set_selected_index(s_tl_menu, idx, MenuRowAlignCenter, true);
-    timeline_prefetch_check();
+    timeline_selection_changed();
   }
 }
 
-//! SELECT opens the article detail; the list-level mark-read toggle applies
-//! on open (the detail flow applies its own toggle on advance).
+//! SELECT: mark the article read (per the list toggle), then advance to the
+//! next article (marking it per the detail toggle). The list IS the reader —
+//! there is no detail view.
 static void timeline_select_click(ClickRecognizerRef rec, void *ctx) {
   MenuIndex idx = menu_layer_get_selected_index(s_tl_menu);
-  if (idx.row >= (uint16_t)s_count) {
+  if (s_count == 0 || idx.row >= (uint16_t)s_count) {
     return;
   }
   if (s_mark_list) {
     article_mark_read((int32_t)idx.row);
   }
-  detail_open((int32_t)idx.row);
+  if (idx.row + 1 < (uint16_t)s_count) {
+    idx.row++;
+    menu_layer_set_selected_index(s_tl_menu, idx, MenuRowAlignCenter, true);
+    timeline_selection_changed();
+    if (s_mark_detail) {
+      article_mark_read((int32_t)idx.row);
+    }
+  } else {
+    vibes_short_pulse(); // end of the list
+  }
 }
 
 //! Long SELECT toggles the star of the selected entry (fire-and-forget).
 static void timeline_star_long_click(ClickRecognizerRef rec, void *ctx) {
   MenuIndex idx = menu_layer_get_selected_index(s_tl_menu);
-  if (idx.row >= (uint16_t)s_count) {
+  if (s_count == 0 || idx.row >= (uint16_t)s_count) {
     return;
   }
   Article *a = &s_articles[idx.row];
-  a->star = a->star ? 0 : 1;
-  proto_star(a->id, a->star != 0);
+  a->star = !a->star;
+  proto_star(a->id, a->star);
   vibes_short_pulse();
   menu_layer_reload_data(s_tl_menu);
 }
@@ -181,78 +278,89 @@ static int16_t timeline_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_i
   return TIMELINE_ROW_H;
 }
 
-//! Timeline cell: right-edge accent bar, dot per entry on the bar, star for
-//! starred entries, title + feed·reltime, pin notch on the selected row.
+//! Timeline cell: accent wash on the selected row, right-edge accent spine,
+//! dot per entry (accent unread / muted read, popping on selection), yellow
+//! star for starred entries, pin notch on the selected row, and the
+//! heading + summary text block.
 static void timeline_draw_row(GContext *ctx, const Layer *cell_layer,
                               MenuIndex *cell_index, void *callback_context) {
   GRect b = layer_get_bounds(cell_layer);
-  bool selected = menu_layer_is_index_selected(s_tl_menu, (MenuIndex *)cell_index);
 
-  // Row background: accent when selected, theme otherwise.
-  graphics_context_set_fill_color(ctx, selected ? s_accent : theme_bg());
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-
-  if (cell_index->row >= (uint16_t)s_count) {
-    // Empty/loading state: a single centered hint row.
-    graphics_context_set_text_color(ctx, selected ? GColorWhite : theme_muted());
+  if (s_count == 0) {
+    graphics_context_set_text_color(ctx, theme_muted());
     graphics_draw_text(ctx, s_loading ? "Loading..." : "No articles",
-                       fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-                       GRect(0, (b.size.h - 22) / 2, b.size.w, 22),
+                       fonts_get_system_font(FONT_KEY_GOTHIC_18),
+                       GRect(4, 0, b.size.w - 8, b.size.h),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
     return;
   }
 
-  Article *a = &s_articles[cell_index->row];
-  const int16_t bar_x = b.size.w - 4; // left edge of the accent bar
-  const int16_t cy = b.size.h / 2;    // row center (dot + pin anchor)
+  uint16_t row = cell_index->row;
+  if (row >= (uint16_t)s_count) {
+    return;
+  }
+  const Article *a = &s_articles[row];
+  bool selected = menu_layer_is_index_selected(s_tl_menu, cell_index);
 
-  // Permanent accent-colored vertical bar on the right edge, full cell height.
+  // Selection accent wash (animated).
+  if (selected) {
+    graphics_context_set_fill_color(ctx, s_tint_cur);
+    graphics_fill_rect(ctx, GRect(0, 0, b.size.w, b.size.h), 0, GCornerNone);
+  }
+
+  // Permanent accent spine on the right edge.
   graphics_context_set_fill_color(ctx, s_accent);
-  graphics_fill_rect(ctx, GRect(bar_x, 0, 3, b.size.h), 0, GCornerNone);
+  graphics_fill_rect(ctx, GRect(b.size.w - SPINE_W - 2, 0, SPINE_W, b.size.h), 0, GCornerNone);
 
-  // Dot centered on the bar: accent = unread, muted = read.
+  int32_t cx = b.size.w - SPINE_W - 2 + SPINE_W / 2; // spine center x
+  int32_t cy = b.size.h / 2;
+
+  // Dot on the spine: accent = unread, muted = read; popping on selection.
+  int32_t dot_r = selected ? s_dot_cur : 3;
   graphics_context_set_fill_color(ctx, a->read ? theme_muted() : s_accent);
-  graphics_fill_circle(ctx, GPoint(bar_x + 2, cy), 2);
+  graphics_fill_circle(ctx, GPoint(cx, cy), (int16_t)dot_r);
 
-  // Starred entries: small filled star just left of the bar.
+  // Yellow star for starred entries, left of the spine.
   if (a->star && s_star_path) {
     graphics_context_set_fill_color(ctx, GColorYellow);
-    gpath_move_to(s_star_path, GPoint(bar_x - 10, cy));
+    gpath_move_to(s_star_path, GPoint(cx - 14, cy));
     gpath_draw_filled(ctx, s_star_path);
   }
 
-  // Title: bold while unread; one line + feed·reltime line, or two wrapped
-  // title lines when the title does not fit (measured, not guessed).
-  const int16_t text_w = bar_x - 22; // x from 4 to bar_x-18
-  GFont title_font = fonts_get_system_font(
-      a->read ? FONT_KEY_GOTHIC_18 : FONT_KEY_GOTHIC_18_BOLD);
-  GSize ts = graphics_text_layout_get_content_size(
-      a->title, title_font, GRect(0, 0, text_w, 100), GTextOverflowModeWordWrap,
-      GTextAlignmentLeft);
-  graphics_context_set_text_color(ctx, selected ? GColorWhite : theme_fg());
-  if (ts.h > 22) {
-    graphics_draw_text(ctx, a->title, title_font, GRect(4, 1, text_w, 44),
-                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-  } else {
-    graphics_draw_text(ctx, a->title, title_font, GRect(4, 3, text_w, 22),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-    char rel[12];
-    format_reltime(rel, sizeof(rel), a->published);
-    char meta[48];
-    snprintf(meta, sizeof(meta), "%s \xc2\xb7 %s", a->feed[0] ? a->feed : "?", rel);
-    graphics_context_set_text_color(ctx, selected ? GColorWhite : theme_muted());
-    graphics_draw_text(ctx, meta, fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                       GRect(4, 27, text_w, 18),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  }
-
-  // Selected row: pin notch — right-pointing triangle with its apex at the
-  // bar, drawn at the row center (static per-row draw: no scroll math).
+  // Pin notch on the selected row, apex at the spine.
   if (selected && s_pin_path) {
     graphics_context_set_fill_color(ctx, s_accent);
-    gpath_move_to(s_pin_path, GPoint(bar_x, cy));
+    gpath_move_to(s_pin_path, GPoint(cx - 7, cy));
     gpath_draw_filled(ctx, s_pin_path);
   }
+
+  // Heading (1 line, bold when unread) + summary (2 lines) + feed · time.
+  int16_t text_right = b.size.w - SPINE_W - 2 - 16;
+  graphics_context_set_text_color(ctx, a->read ? theme_muted() : theme_fg());
+  graphics_draw_text(ctx, a->title,
+                     fonts_get_system_font(a->read ? FONT_KEY_GOTHIC_18 : FONT_KEY_GOTHIC_18_BOLD),
+                     GRect(4, 3, text_right - 4, 19),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+
+  graphics_context_set_text_color(ctx, theme_muted());
+  graphics_draw_text(ctx, a->summary,
+                     fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                     GRect(4, 24, text_right - 4, 30),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+
+  char meta[48];
+  char t[16];
+  format_reltime(t, sizeof(t), a->published);
+  snprintf(meta, sizeof(meta), "%s · %s", a->feed, t);
+  graphics_draw_text(ctx, meta,
+                     fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                     GRect(4, 56, text_right - 4, 14),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+static void header_underline_update(Layer *layer, GContext *ctx) {
+  graphics_context_set_fill_color(ctx, s_accent);
+  graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 }
 
 static void timeline_window_load(Window *window) {
@@ -260,10 +368,14 @@ static void timeline_window_load(Window *window) {
   GRect bounds = layer_get_bounds(root);
 
   // Custom title bar: this SDK has no window title/fullscreen API — windows
-  // are full-bleed by default (no status bar), so the header sits at the top.
+  // are full-bleed by default, so the header sits at the top with a 2px
+  // accent underline.
   window_set_background_color(window, theme_bg());
 
-  s_tl_header = text_layer_create(GRect(4, 2, bounds.size.w - 8, 24));
+  s_star_path = gpath_create(&STAR_PATH_INFO);
+  s_pin_path = gpath_create(&PIN_PATH_INFO);
+
+  s_tl_header = text_layer_create(GRect(4, 2, bounds.size.w - 8, 22));
   text_layer_set_font(s_tl_header, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_tl_header, GTextAlignmentLeft);
   text_layer_set_overflow_mode(s_tl_header, GTextOverflowModeTrailingEllipsis);
@@ -272,6 +384,10 @@ static void timeline_window_load(Window *window) {
   text_layer_set_text(s_tl_header, s_title);
   layer_add_child(root, text_layer_get_layer(s_tl_header));
 
+  s_tl_underline = layer_create(GRect(0, TIMELINE_HEADER_H - 2, bounds.size.w, 2));
+  layer_set_update_proc(s_tl_underline, header_underline_update);
+  layer_add_child(root, s_tl_underline);
+
   s_tl_menu = menu_layer_create(
       GRect(0, TIMELINE_HEADER_H, bounds.size.w, bounds.size.h - TIMELINE_HEADER_H));
   menu_layer_set_callbacks(s_tl_menu, NULL, (MenuLayerCallbacks){
@@ -279,21 +395,31 @@ static void timeline_window_load(Window *window) {
     .get_cell_height = timeline_get_cell_height,
     .draw_row = timeline_draw_row,
   });
-  window_set_click_config_provider(window, timeline_click_config_provider);
-  menu_layer_pad_bottom_enable(s_tl_menu, true);
+  // Native highlight is disabled (normal == highlight colors); the accent
+  // wash + pin are drawn by draw_row so they can be animated.
   menu_layer_set_normal_colors(s_tl_menu, theme_bg(), theme_fg());
-  menu_layer_set_highlight_colors(s_tl_menu, s_accent, GColorWhite);
+  menu_layer_set_highlight_colors(s_tl_menu, theme_bg(), theme_fg());
+  menu_layer_pad_bottom_enable(s_tl_menu, true);
   layer_add_child(root, menu_layer_get_layer(s_tl_menu));
+
+  window_set_click_config_provider(window, timeline_click_config_provider);
+
+  s_tint_cur = selection_tint();
+  s_dot_cur = 4;
+  s_tl_visible = true;
 }
 
 //! Teardown on window unload: flush any pending mark-read batch and release
 //! every layer/path so a later re-open builds fresh.
 static void timeline_close(void) {
-  proto_flush_now(); // never leave a mark-read batch half-flushed
-  menu_layer_destroy(s_tl_menu);
-  text_layer_destroy(s_tl_header);
+  proto_flush_now();
   s_tl_menu = NULL;
   s_tl_header = NULL;
+  s_tl_underline = NULL;
+}
+
+static void timeline_window_unload(Window *window) {
+  timeline_close();
   if (s_star_path) {
     gpath_destroy(s_star_path);
     s_star_path = NULL;
@@ -302,19 +428,15 @@ static void timeline_close(void) {
     gpath_destroy(s_pin_path);
     s_pin_path = NULL;
   }
-}
-
-static void timeline_window_unload(Window *window) {
-  timeline_close();
+  menu_layer_destroy(s_tl_menu);
+  text_layer_destroy(s_tl_header);
+  layer_destroy(s_tl_underline);
   window_destroy(s_tl_window);
   s_tl_window = NULL;
 }
 
 static void timeline_window_appear(Window *window) {
   s_tl_visible = true;
-  if (s_tl_menu) {
-    menu_layer_reload_data(s_tl_menu); // read/star flags may have changed
-  }
 }
 
 static void timeline_window_disappear(Window *window) {
@@ -325,36 +447,27 @@ static void timeline_window_disappear(Window *window) {
 //! the first page is requested; the menu shows a "Loading..." hint row until
 //! the first page arrives.
 void timeline_open(const char *stream, const char *title) {
-  if (!s_tl_window) {
-    s_tl_window = window_create();
-    window_set_window_handlers(s_tl_window, (WindowHandlers){
-      .load = timeline_window_load,
-      .appear = timeline_window_appear,
-      .disappear = timeline_window_disappear,
-      .unload = timeline_window_unload,
-    });
+  if (s_tl_window) {
+    window_stack_remove(s_tl_window, true);
   }
-  if (!s_star_path) {
-    s_star_path = gpath_create(&STAR_PATH_INFO);
-  }
-  if (!s_pin_path) {
-    s_pin_path = gpath_create(&PIN_PATH_INFO);
-  }
-  s_count = 0;
-  s_loading = true;
-  s_loaded_all = false;
-  s_cont[0] = '\0';
   snprintf(s_stream, sizeof(s_stream), "%s", stream ? stream : "");
   snprintf(s_title, sizeof(s_title), "%s", title ? title : "");
-  if (s_tl_header) {
-    text_layer_set_text(s_tl_header, s_title);
-  }
-  if (s_tl_menu) {
-    menu_layer_reload_data(s_tl_menu);
-  }
-  if (!s_tl_visible) {
-    window_stack_push(s_tl_window, true);
-  }
+  s_count = 0;
+  s_cont[0] = '\0';
+  s_loading = true;
+  s_loaded_all = false;
+  s_tint_cur = selection_tint();
+  s_dot_cur = 4;
+
+  s_tl_window = window_create();
+  window_set_window_handlers(s_tl_window, (WindowHandlers){
+    .load = timeline_window_load,
+    .unload = timeline_window_unload,
+    .appear = timeline_window_appear,
+    .disappear = timeline_window_disappear,
+  });
+  window_stack_push(s_tl_window, true);
+
   proto_request_items(s_stream, "");
 }
 
@@ -362,24 +475,33 @@ void timeline_open(const char *stream, const char *title) {
 // Item-page collect hooks (called from proto_handle_inbox)
 // ---------------------------------------------------------------------------
 
-//! A new page is starting: make room in the ring buffer by shifting out the
-//! oldest 24 entries when the buffer is nearly full.
+//! A new page is starting: make room in the ring buffer by dropping the
+//! newest entries (the user has already scrolled past them) when the page
+//! would overflow.
 void timeline_page_begin(int32_t n) {
-  (void)n;
-  if (s_count >= MAX_ARTICLES - 24) {
-    memmove(&s_articles[0], &s_articles[24],
-            (size_t)(s_count - 24) * sizeof(Article));
-    s_count -= 24;
+  int32_t need = n < 0 ? 0 : n;
+  if (s_count + need > MAX_ARTICLES) {
+    int32_t drop = s_count + need - MAX_ARTICLES;
+    if (drop >= s_count) {
+      s_count = 0;
+    } else {
+      memmove(s_articles, &s_articles[drop],
+              (size_t)(s_count - drop) * sizeof(Article));
+      s_count -= drop;
+    }
   }
 }
 
-//! Append one article heading from the current message (bounds-checked).
+//! Append one article (heading + summary) from the current message
+//! (bounds-checked; overflow drops the oldest from the front).
 void timeline_collect_article(DictionaryIterator *iter) {
   if (s_count >= MAX_ARTICLES) {
-    return;
+    memmove(s_articles, &s_articles[1], (size_t)(s_count - 1) * sizeof(Article));
+    s_count--;
   }
-  Article *a = &s_articles[s_count];
-  memset(a, 0, sizeof(Article));
+  Article *a = &s_articles[s_count++];
+  memset(a, 0, sizeof(*a));
+
   Tuple *t;
   if ((t = dict_find(iter, MESSAGE_KEY_ItemId))) {
     snprintf(a->id, sizeof(a->id), "%s", t->value->cstring);
@@ -393,39 +515,38 @@ void timeline_collect_article(DictionaryIterator *iter) {
   if ((t = dict_find(iter, MESSAGE_KEY_ItemFeedId))) {
     snprintf(a->feed_id, sizeof(a->feed_id), "%s", t->value->cstring);
   }
+  if ((t = dict_find(iter, MESSAGE_KEY_ItemSummary))) {
+    snprintf(a->summary, sizeof(a->summary), "%s", t->value->cstring);
+  }
   if ((t = dict_find(iter, MESSAGE_KEY_ItemTime))) {
     a->published = t->value->int32;
   }
   if ((t = dict_find(iter, MESSAGE_KEY_ItemRead))) {
-    a->read = (uint8_t)(t->value->int32 != 0);
+    a->read = t->value->int32 ? 1 : 0;
   }
   if ((t = dict_find(iter, MESSAGE_KEY_ItemStar))) {
-    a->star = (uint8_t)(t->value->int32 != 0);
+    a->star = t->value->int32 ? 1 : 0;
   }
-  s_count++;
 }
 
 //! The page ended: store the continuation ("", = no more items), release the
 //! loading flag and redraw.
 void timeline_page_end(const char *cont) {
   snprintf(s_cont, sizeof(s_cont), "%s", cont ? cont : "");
-  if (s_cont[0] == '\0') {
-    s_loaded_all = true;
-  }
+  s_loaded_all = (s_cont[0] == '\0');
   s_loading = false;
   if (s_tl_menu) {
     menu_layer_reload_data(s_tl_menu);
-    layer_mark_dirty(menu_layer_get_layer(s_tl_menu));
   }
 }
 
 //! Prefetch the next page when the selection enters the last 6 rows.
 static void timeline_prefetch_check(void) {
-  if (!s_tl_menu || s_loading || s_loaded_all || s_count <= 0) {
+  if (!s_tl_menu || s_loading || s_loaded_all || s_count == 0) {
     return;
   }
   MenuIndex idx = menu_layer_get_selected_index(s_tl_menu);
-  if ((int32_t)idx.row + 6 >= s_count) {
+  if (idx.row + 6 >= (uint16_t)s_count) {
     s_loading = true;
     proto_request_items(s_stream, s_cont);
   }
@@ -446,227 +567,33 @@ static void article_mark_read(int32_t idx) {
     return;
   }
   a->read = 1;
+  proto_mark_push(a->id);
+  tree_feed_decrement(a->feed_id);
   if (s_tl_menu) {
     menu_layer_reload_data(s_tl_menu);
   }
-  proto_mark_push(a->id);
-  tree_feed_decrement(a->feed_id);
-}
-
-// ---------------------------------------------------------------------------
-// Detail window
-// ---------------------------------------------------------------------------
-
-static void detail_click_config_provider(void *ctx) {
-  window_single_click_subscribe(BUTTON_ID_SELECT, detail_select_click);
-  window_long_click_subscribe(BUTTON_ID_SELECT, 500, detail_star_long_click, NULL);
-  window_single_click_subscribe(BUTTON_ID_BACK, detail_back_click);
-}
-
-//! SELECT advances to the next article (marks read per the detail toggle);
-//! at the end the pulse says "no more" and the card stays.
-static void detail_select_click(ClickRecognizerRef rec, void *ctx) {
-  if (s_detail_idx + 1 >= s_count) {
-    vibes_short_pulse();
-    return;
-  }
-  s_detail_idx++;
-  if (s_mark_detail) {
-    article_mark_read(s_detail_idx);
-  }
-  detail_render();
-}
-
-//! Long SELECT toggles the star of the shown article.
-static void detail_star_long_click(ClickRecognizerRef rec, void *ctx) {
-  if (s_detail_idx >= s_count) {
-    return;
-  }
-  Article *a = &s_articles[s_detail_idx];
-  a->star = a->star ? 0 : 1;
-  proto_star(a->id, a->star != 0);
-  vibes_short_pulse();
-  if (s_tl_menu) {
-    menu_layer_reload_data(s_tl_menu); // keep the timeline star marker fresh
-  }
-}
-
-static void detail_back_click(ClickRecognizerRef rec, void *ctx) {
-  window_stack_pop(true);
-}
-
-//! Fill the summary text layer and size the scroll content to fit it.
-static void detail_set_summary(const char *text) {
-  text_layer_set_text(s_summary_text, text);
-  GSize ss = graphics_text_layout_get_content_size(
-      text, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-      GRect(0, 0, layer_get_bounds(window_get_root_layer(s_detail_window)).size.w - 8,
-            2000),
-      GTextOverflowModeWordWrap, GTextAlignmentLeft);
-  scroll_layer_set_content_size(s_detail_scroll,
-                                GSize(layer_get_bounds(window_get_root_layer(
-                                          s_detail_window)).size.w, ss.h + 4));
-}
-
-//! Render the current article: title (up to ~4 wrapped lines), feed·time,
-//! and the summary from the single-slot cache or a fresh request.
-static void detail_render(void) {
-  if (!s_detail_window || !s_detail_title || !s_summary_text ||
-      s_detail_idx < 0 || s_detail_idx >= s_count) {
-    return;
-  }
-  Article *a = &s_articles[s_detail_idx];
-  Layer *root = window_get_root_layer(s_detail_window);
-  GRect bounds = layer_get_bounds(root);
-
-  const char *title = a->title[0] ? a->title : a->feed;
-  GFont title_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-  GSize ts = graphics_text_layout_get_content_size(
-      title, title_font, GRect(0, 0, bounds.size.w - 8, 200),
-      GTextOverflowModeWordWrap, GTextAlignmentLeft);
-  int16_t title_h = ts.h > 116 ? 116 : (ts.h < 26 ? 26 : ts.h);
-  text_layer_set_text(s_detail_title, title);
-  layer_set_frame(text_layer_get_layer(s_detail_title),
-                  GRect(4, 2, bounds.size.w - 8, title_h));
-
-  char meta[64];
-  format_datetime(meta, sizeof(meta), a->published);
-  size_t l = strlen(meta);
-  snprintf(meta + l, sizeof(meta) - l, " \xc2\xb7 %s", a->feed[0] ? a->feed : "?");
-  text_layer_set_text(s_detail_meta, meta);
-  int16_t meta_y = 2 + title_h + 2;
-  layer_set_frame(text_layer_get_layer(s_detail_meta),
-                  GRect(4, meta_y, bounds.size.w - 8, 18));
-
-  int16_t scroll_y = meta_y + 18 + 4;
-  layer_set_frame(scroll_layer_get_layer(s_detail_scroll),
-                  GRect(0, scroll_y, bounds.size.w, bounds.size.h - scroll_y));
-
-  if (strcmp(s_summary_id, a->id) == 0) {
-    // Cache hit — or the request for this id is already in flight and the
-    // placeholder ("Loading...") will be replaced when the answer arrives.
-    detail_set_summary(s_summary);
-  } else {
-    snprintf(s_summary_id, sizeof(s_summary_id), "%s", a->id);
-    snprintf(s_summary, sizeof(s_summary), "Loading...");
-    detail_set_summary(s_summary);
-    proto_request_summary(a->id);
-  }
-}
-
-//! The requested summary arrived: cache it and render if it matches the
-//! article currently shown. Stale responses (user moved on) are dropped —
-//! the single-slot cache only ever holds the current request.
-void timeline_summary_arrived(DictionaryIterator *iter) {
-  Tuple *sum_t = dict_find(iter, MESSAGE_KEY_ItemSummary);
-  if (!sum_t) {
-    return;
-  }
-  Tuple *id_t = dict_find(iter, MESSAGE_KEY_ItemId);
-  const char *sid = id_t ? id_t->value->cstring : "";
-  if (strcmp(s_summary_id, sid) != 0) {
-    return; // stale: the user already moved to another article
-  }
-  snprintf(s_summary, sizeof(s_summary), "%s", sum_t->value->cstring);
-  if (s_detail_window && s_summary_text && s_detail_idx >= 0 &&
-      s_detail_idx < s_count && strcmp(s_articles[s_detail_idx].id, sid) == 0) {
-    detail_set_summary(s_summary);
-  }
-}
-
-static void detail_window_load(Window *window) {
-  Layer *root = window_get_root_layer(window);
-  GRect bounds = layer_get_bounds(root);
-
-  // Full-bleed window (no status bar by default on this SDK).
-  window_set_background_color(window, theme_bg());
-
-  s_detail_title = text_layer_create(GRect(4, 2, bounds.size.w - 8, 88));
-  text_layer_set_font(s_detail_title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
-  text_layer_set_overflow_mode(s_detail_title, GTextOverflowModeWordWrap);
-  text_layer_set_background_color(s_detail_title, GColorClear);
-  text_layer_set_text_color(s_detail_title, theme_fg());
-  layer_add_child(root, text_layer_get_layer(s_detail_title));
-
-  s_detail_meta = text_layer_create(GRect(4, 94, bounds.size.w - 8, 18));
-  text_layer_set_font(s_detail_meta, fonts_get_system_font(FONT_KEY_GOTHIC_14));
-  text_layer_set_overflow_mode(s_detail_meta, GTextOverflowModeTrailingEllipsis);
-  text_layer_set_background_color(s_detail_meta, GColorClear);
-  text_layer_set_text_color(s_detail_meta, theme_muted());
-  layer_add_child(root, text_layer_get_layer(s_detail_meta));
-
-  s_detail_scroll = scroll_layer_create(GRect(0, 116, bounds.size.w, bounds.size.h - 116));
-  scroll_layer_set_shadow_hidden(s_detail_scroll, true);
-  // The scroll layer's internal provider handles UP/DOWN scrolling and then
-  // calls our provider for SELECT / long-SELECT / BACK (documented chain).
-  scroll_layer_set_callbacks(s_detail_scroll, (ScrollLayerCallbacks){
-    .click_config_provider = detail_click_config_provider,
-  });
-  s_summary_text = text_layer_create(GRect(4, 0, bounds.size.w - 8, 100));
-  text_layer_set_font(s_summary_text, fonts_get_system_font(FONT_KEY_GOTHIC_18));
-  text_layer_set_overflow_mode(s_summary_text, GTextOverflowModeWordWrap);
-  text_layer_set_background_color(s_summary_text, GColorClear);
-  text_layer_set_text_color(s_summary_text, theme_fg());
-  scroll_layer_add_child(s_detail_scroll, text_layer_get_layer(s_summary_text));
-  scroll_layer_set_click_config_onto_window(s_detail_scroll, window);
-  layer_add_child(root, scroll_layer_get_layer(s_detail_scroll));
-}
-
-static void detail_window_unload(Window *window) {
-  scroll_layer_destroy(s_detail_scroll);
-  text_layer_destroy(s_detail_meta);
-  text_layer_destroy(s_detail_title);
-  s_detail_scroll = NULL;
-  s_detail_meta = NULL;
-  s_detail_title = NULL;
-  s_summary_text = NULL;
-  window_destroy(s_detail_window);
-  s_detail_window = NULL;
-}
-
-//! Open the detail card for a given article index.
-static void detail_open(int32_t idx) {
-  if (idx < 0 || idx >= s_count) {
-    return;
-  }
-  s_detail_idx = idx;
-  if (!s_detail_window) {
-    s_detail_window = window_create();
-    window_set_window_handlers(s_detail_window, (WindowHandlers){
-      .load = detail_window_load,
-      .unload = detail_window_unload,
-    });
-  }
-  window_stack_push(s_detail_window, true);
-  detail_render(); // safe whether load already ran or runs on push
 }
 
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
-//! Re-apply accent/theme to the timeline + detail windows.
+//! Re-apply accent/theme to the timeline window (from settings).
 void timeline_apply_settings(void) {
-  if (s_tl_window) {
-    window_set_background_color(s_tl_window, theme_bg());
+  if (!s_tl_window) {
+    return;
   }
+  window_set_background_color(s_tl_window, theme_bg());
   if (s_tl_header) {
     text_layer_set_text_color(s_tl_header, theme_fg());
   }
+  if (s_tl_underline) {
+    layer_mark_dirty(s_tl_underline);
+  }
   if (s_tl_menu) {
     menu_layer_set_normal_colors(s_tl_menu, theme_bg(), theme_fg());
-    menu_layer_set_highlight_colors(s_tl_menu, s_accent, GColorWhite);
+    menu_layer_set_highlight_colors(s_tl_menu, theme_bg(), theme_fg());
+    layer_mark_dirty(menu_layer_get_layer(s_tl_menu));
   }
-  if (s_detail_window) {
-    window_set_background_color(s_detail_window, theme_bg());
-  }
-  if (s_detail_title) {
-    text_layer_set_text_color(s_detail_title, theme_fg());
-  }
-  if (s_detail_meta) {
-    text_layer_set_text_color(s_detail_meta, theme_muted());
-  }
-  if (s_summary_text) {
-    text_layer_set_text_color(s_summary_text, theme_fg());
-  }
+  s_tint_cur = selection_tint();
 }

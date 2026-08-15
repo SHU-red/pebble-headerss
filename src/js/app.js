@@ -9,12 +9,11 @@
  *
  * Wire protocol (messageKeys in package.json):
  *   watch->phone: FetchTree | FetchItems(+ItemStream/ItemCont/FetchN) |
- *     MarkRead (CSV ids) | StarItem(+StarOn) | MarkAllRead | FetchSummary
- *     (+ItemId) | RequestConfig
+ *     MarkRead (CSV ids) | StarItem(+StarOn) | MarkAllRead | RequestConfig
  *   phone->watch: ResultCode/ResultText (0 = success), FeedCount + per-node
  *     FeedType/FeedId/FeedName/FeedUnread/FeedParent, ItemCount + per-item
- *     ItemId/ItemTitle/ItemFeed/ItemFeedId/ItemTime/ItemRead/ItemStar,
- *     ItemCont (page continuation), ItemSummary(+ItemId echo).
+ *     ItemId/ItemTitle/ItemFeed/ItemFeedId/ItemSummary/ItemTime/ItemRead/
+ *     ItemStar, ItemCont (page continuation).
  *
  * Clay auto-handles the config webview: on save it writes 'clay-settings'
  * for page prefill and sends every watch-bound messageKey value (AccentColor,
@@ -317,6 +316,7 @@ function sendItemChain(items, index, continuation, generation) {
   dict.ItemTitle = item.title;
   dict.ItemFeed = item.feed;
   dict.ItemFeedId = item.feedId;
+  dict.ItemSummary = item.summary || '';
   dict.ItemTime = item.time;
   dict.ItemRead = item.read;
   dict.ItemStar = item.star;
@@ -408,32 +408,6 @@ function markAllReadFlow(stream) {
       return;
     }
     sendResult(0, 'OK');
-  });
-}
-
-/**
- * Fetch an item summary and send it back with the id echoed.
- * @param {string} id
- */
-function summaryFlow(id) {
-  var client = makeClient();
-  if (!client) {
-    sendResult(1, 'Set server in phone settings');
-    return;
-  }
-  client.getSummary(id, function (err, summary) {
-    if (err) {
-      sendResult(err.code, err.text);
-      return;
-    }
-    var dict = {};
-    dict.ItemSummary = summary;
-    dict.ItemId = id;
-    Pebble.sendAppMessage(dict, function () {
-      console.log('summary: sent summary for ' + id);
-    }, function (sendErr) {
-      console.log('summary: failed to send: ' + JSON.stringify(sendErr));
-    });
   });
 }
 
@@ -588,19 +562,6 @@ Pebble.addEventListener('appmessage', function (e) {
   if (markAll !== undefined && markAll !== null && markAll !== '') {
     console.log('appmessage: marking all read');
     markAllReadFlow(String(markAll));
-    return;
-  }
-
-  var fetchSummary = payloadValue(payload, 'FetchSummary');
-  if (fetchSummary !== undefined && fetchSummary !== null && fetchSummary !== 0) {
-    var itemId = payloadValue(payload, 'ItemId');
-    if (itemId === undefined || itemId === null || itemId === '') {
-      console.log('appmessage: summary request without ItemId');
-      sendResult(1, 'Missing item id');
-      return;
-    }
-    console.log('appmessage: fetching summary');
-    summaryFlow(String(itemId));
     return;
   }
 

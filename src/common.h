@@ -10,12 +10,12 @@
 // ---------------------------------------------------------------------------
 
 #define MAX_FEED_NODES 64
-#define MAX_ARTICLES 96
+#define MAX_ARTICLES 64
 #define PAGE_SIZE 50
 #define MARK_BATCH_MAX 12
 #define MARK_FLUSH_MS 500
 #define REQUEST_TIMEOUT_MS 12000
-#define TIMELINE_ROW_H 46
+#define TIMELINE_ROW_H 72
 
 //! One node of the feed tree as streamed by the phone.
 //! kind: 0 special (reading-list / starred), 1 folder, 2 feed.
@@ -27,12 +27,14 @@ typedef struct {
   int32_t unread;
 } FeedNode;
 
-//! One article heading in the timeline ring buffer.
+//! One article in the timeline ring buffer (heading + summary — there is no
+//! separate detail view; the list IS the reader).
 typedef struct {
   char id[24];       // decimal microsecond id, kept as a string
   char title[64];
   char feed[24];     // feed display name
   char feed_id[16];  // "feed/N"
+  char summary[140]; // stripped summary text
   int32_t published; // unix seconds
   uint8_t read;
   uint8_t star;

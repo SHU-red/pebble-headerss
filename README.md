@@ -9,14 +9,16 @@ reading view with an accent bar, dots and a pin.
 - **Feed tree** — All unread / Starred streams, nested folders with unread
   badges; open a folder to play **all articles recursively** or dive into a
   single feed
-- **Timeline reading view** — native-Timeline look: permanent accent bar on
-  the right edge, one dot per article (accent = unread, muted = read), star
-  glyphs, pin notch on the selected row; lazy pages (50 titles) fetched only
-  when you scroll near the bottom
-- **Mark read on open** — two toggle rows in the watch sub-menu (list /
-  detail), both default on; switch them off to only star articles and leave
-  them unread
-- **Star** — long-press SELECT in the timeline or in the detail card
+- **Timeline reading view** — native-Timeline look: permanent accent spine on
+  the right edge, one dot per article (accent = unread, muted = read), yellow
+  star icon on starred entries, animated accent wash + pin + popping dot on
+  the selected row; every row always shows heading + summary; lazy pages
+  (50 articles) fetched only when you scroll near the bottom
+- **Read through** — SELECT marks the article read (per the list toggle) and
+  advances to the next (per the detail toggle); both toggles default on,
+  switch them off to only star articles and leave them unread
+- **Star** — long-press SELECT toggles the star; starred articles show a
+  yellow star icon
 - **Settings** — UP on the top dots row opens the watch sub-menu: Refresh,
   Mark all read, Connection hint, and the two reading toggle rows; the
   connection/appearance page lives in the phone app settings (Clay):

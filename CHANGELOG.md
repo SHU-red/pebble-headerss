@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.2
+
+- Timeline reading view redesigned as the modern native-Timeline look:
+  permanent accent spine, per-article dots (accent unread / muted read),
+  yellow star icons, animated accent wash + pin notch + popping dot on the
+  selected row, accent underline header
+- No detail view anymore: every row always shows heading + summary
+  (summaries stream with the articles, stripped to 140 chars)
+- SELECT marks read (per the list toggle) and advances to the next article
+  (per the detail toggle); long-press SELECT stars; starred rows show a star
+- Ring buffer trimmed to 64 articles (fits the summary field; ~22 KB heap
+  free on basalt-class platforms)
+
 ## 0.1.1
 
 - Reading options moved from the phone settings to the watch: "Mark read on
