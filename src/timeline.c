@@ -1639,6 +1639,20 @@ static void timeline_star_long_click(ClickRecognizerRef rec, void *ctx) {
   }
 }
 
+//! HOLD DOWN: jump to the next article without scrolling through the text
+//! (a long article used to need ~19 page-downs). The tap still page-scrolls;
+//! the advance guard (cleared at the settle) keeps one jump per hold.
+static void timeline_down_hold_click(ClickRecognizerRef rec, void *ctx) {
+  APP_LOG(APP_LOG_LEVEL_INFO, "nav: hold DOWN -> next");
+  maybe_advance();
+}
+
+//! HOLD UP: jump to the previously read article (no scrolling back).
+static void timeline_up_hold_click(ClickRecognizerRef rec, void *ctx) {
+  APP_LOG(APP_LOG_LEVEL_INFO, "nav: hold UP -> previous");
+  maybe_regress();
+}
+
 static void timeline_back_click(ClickRecognizerRef rec, void *ctx) {
   window_stack_pop(true);
 }
@@ -1646,12 +1660,13 @@ static void timeline_back_click(ClickRecognizerRef rec, void *ctx) {
 //! Custom click config: UP/DOWN are subscribed here (never
 //! scroll_layer_set_click_config_onto_window) so the reader controls the
 //! advance semantics; scrolling delegates to the scroll layer's handlers.
+//! Tap = page-scroll; HOLD (500 ms) = jump to the next/previous article,
+//! so a long article needs no ~19 taps to move on.
 static void timeline_click_config_provider(void *ctx) {
-  // Repeating clicks: a single press scrolls one page; HOLDING UP/DOWN
-  // repeats every 100 ms, so a very long article (up to ~2800 px of text)
-  // scrolls through in a couple of seconds instead of ~18 presses.
-  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, timeline_up_click);
-  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, timeline_down_click);
+  window_single_click_subscribe(BUTTON_ID_UP, timeline_up_click);
+  window_single_click_subscribe(BUTTON_ID_DOWN, timeline_down_click);
+  window_long_click_subscribe(BUTTON_ID_UP, 500, timeline_up_hold_click, NULL);
+  window_long_click_subscribe(BUTTON_ID_DOWN, 500, timeline_down_hold_click, NULL);
   window_single_click_subscribe(BUTTON_ID_SELECT, timeline_select_click);
   window_long_click_subscribe(BUTTON_ID_SELECT, 500, timeline_star_long_click, NULL);
   window_single_click_subscribe(BUTTON_ID_BACK, timeline_back_click);

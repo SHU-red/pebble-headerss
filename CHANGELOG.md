@@ -2,6 +2,9 @@
 
 ## 0.3.25
 
+- **HOLD UP/DOWN jumps to the previous/next article** (tap still
+  page-scrolls): a long article used to need ~19 taps to move on; holding
+  the button now advances immediately, skipping the text.
 - **The article finally scrolls on screen — the reader's core bug**: the
   heading + summary page never moved visually. The page's header and body
   layers were attached with `layer_add_child()` onto the scroll layer's own
