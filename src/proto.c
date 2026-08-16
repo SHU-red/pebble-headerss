@@ -353,18 +353,19 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     s_touch = t->value->int32 != 0;
     settings = true;
   }
+  // Highlight words from Clay: persist the new list and re-layout an open
+  // reader so the change applies to the current article immediately. Handled
+  // BEFORE the settings early-return — the launch restore sends the words
+  // bundled with AccentColor/TouchEnabled in one message, and the old order
+  // dropped them (settings returned first).
+  if ((t = dict_find(iter, MESSAGE_KEY_HighlightWords))) {
+    storage_highlight_set_words(t->value->cstring);
+    timeline_highlight_words_changed();
+  }
   if (settings) {
     storage_save_settings();
     apply_settings();
     (void)app_touch_navigation_enable(s_touch);
-    return;
-  }
-
-  // Highlight words from Clay: persist the new list and re-layout an open
-  // reader so the change applies to the current article immediately.
-  if ((t = dict_find(iter, MESSAGE_KEY_HighlightWords))) {
-    storage_highlight_set_words(t->value->cstring);
-    timeline_highlight_words_changed();
     return;
   }
 

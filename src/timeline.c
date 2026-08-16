@@ -9,32 +9,40 @@
 // ---------------------------------------------------------------------------
 // Timeline reading view (see timeline.h). Article headings + summaries
 // stream in from the phone into a ring buffer. The reader is a paged
-// full-screen view: a 2 px accent progress line along the very top, a black
-// top bar (stream name in accent) below it, one article per page — an accent
-// header bar (full multi-line heading + feed·time), a scrollable summary
-// body — and a thick accent SIDEBAR on the right holding the read/unread
-// dot, the star and the highlight-word M badge. Page changes slide with a
+// full-screen view: a 2 px accent progress line along the very top, a theme
+// top bar (stream name) below it, one article per page — an editorial
+// header (GOTHIC_28_BOLD heading on the page background, muted feed·time
+// meta, a 2 px accent rule), a scrollable summary body — and a slim accent
+// SIDEBAR on the right holding the clock chip, the read/unread dot, the
+// star and the highlight-word M badge. Page changes slide with a
 // continuous two-page transition (the outgoing page leaves while the
 // incoming one enters — no teleport cut).
 // ---------------------------------------------------------------------------
 
 #define PROGRESS_H 2      // accent progress line along the very top (y=0..2)
 #define PROGRESS_DOT_H 8  // position dot diameter (extends below the line)
-#define TOP_BAR_H 24      // black top bar with the stream name (starts y=2)
-#define DIVIDER_H 2       // accent divider line under the top bar (y=26..28)
-#define SIDEBAR_W 26      // thick accent sidebar holding the icons
+#define TOP_BAR_H 24      // theme top bar with the stream name (starts y=2)
+#define DIVIDER_H 1       // hairline divider under the top bar (P6)
+#define SIDEBAR_W 20      // slim accent sidebar holding the icons (P14: 26 -> 20)
 #define HEADER_META_H 18  // feed·time line + padding below the heading
 
 // Sidebar icons: monochrome (inactive = black, active = white — except the
-// highlight M, which uses the shared alarm color), stacked at the top of the
-// full-height sidebar ~10 px apart, starting ~8 px from the very top.
+// highlight M chip, which uses the shared alarm color), stacked in a
+// vertically-centered column beside the physical SELECT button. The stack
+// (22+12+16+12+18 = 78 px) starts below the clock chip (top 6, height 36 ->
+// bottom 42) on every target: the P3 overlap on 144×168 is gone (stack top
+// there = (168-78)/2 = 45 > 42).
 #define SIDEBAR_ICON_GAP 12 // vertical gap between the indicators
-#define SIDEBAR_DISC_D 20   // read/unread disc diameter
-#define SIDEBAR_STAR_H 30   // fav star height
-#define SIDEBAR_MAG_H 24    // match magnifier glyph height
-// The indicator column is vertically centered beside the physical SELECT
-// button (right edge, mid-screen): total stack = 30+12+20+12+24 = 98 px.
-#define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 98) / 2)
+#define SIDEBAR_DISC_D 16   // read/unread disc diameter
+#define SIDEBAR_STAR_H 22   // fav star height
+#define SIDEBAR_MAG_H 18    // match magnifier / M chip height
+#define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 78) / 2)
+// Clock chip in the sidebar's top: 2 rows of GOTHIC_14_BOLD digits in a
+// black rounded chip with a 1 px white border (the border keeps the black
+// chip visible on dark accents — P11).
+#define SIDEBAR_CLOCK_W 18
+#define SIDEBAR_CLOCK_H 36
+#define SIDEBAR_CLOCK_TOP 6
 
 // Highlight alarm color: the highlight M badge and ALL matched words (body
 // and title) share this one color so the connection is obvious.
@@ -202,29 +210,21 @@ static Animation *s_anim_b; // spare page slides in
 static GRect s_from_a, s_to_a, s_from_b, s_to_b;
 static AppTimer *s_transition_watchdog; // failsafe: releases a wedged transition
 
-// Shared draw path: a chunky star (~30 px) — the favourite indicator in the
-// sidebar. Bright chrome-yellow when starred (pops on the accent bar),
-// black otherwise.
+// Shared draw path: a chunky star (~18 px) — the favourite indicator in the
+// sidebar. Bright chrome-yellow with a black outline when starred (the
+// outline keeps it visible on yellow/green accents), black otherwise.
 static const GPathInfo STAR_ICON_INFO = {
   .num_points = 10,
   .points = (GPoint[10]){
-    { 0, -12 }, { 4, -4 }, { 12, -4 }, { 6, 2 }, { 10, 12 },
-    { 0, 7 }, { -10, 12 }, { -6, 2 }, { -12, -4 }, { -4, -4 },
+    { 0, -10 }, { 3, -3 }, { 9, -3 }, { 5, 2 }, { 8, 10 },
+    { 0, 6 }, { -8, 10 }, { -5, 2 }, { -9, -3 }, { -3, -3 },
   },
 };
 
 static GPath *s_star_path;
 
-// Shared draw path: a closed check mark (~16 px) for the all-caught-up
-// status; drawn in accent above the status text.
-static const GPathInfo CHECK_PATH_INFO = {
-  .num_points = 6,
-  .points = (GPoint[6]){
-    { -7, 2 }, { -1, 8 }, { 7, -3 },
-    { 5, -5 }, { -4, 2 }, { -8, 0 },
-  },
-};
-
+// The all-caught-up check mark uses the shared UI_CHECK_PATH_INFO from
+// common.h (the dialogs draw the same mark for success).
 static GPath *s_status_check_path;
 
 static void timeline_prefetch_check(void);
@@ -308,13 +308,14 @@ static void progress_update(Layer *layer, GContext *ctx) {
       if (w > max_w) {
         w = max_w;
       }
-      // The muted track (the unread remainder, untouched).
+      // The muted track (the unread remainder, untouched) — rounded caps
+      // (radius 1 on the 2 px line) so the bar reads as a modern scrollbar.
       graphics_context_set_fill_color(ctx, theme_muted());
-      graphics_fill_rect(ctx, GRect(0, 0, max_w, PROGRESS_H), 0, GCornerNone);
+      graphics_fill_rect(ctx, GRect(0, 0, max_w, PROGRESS_H), 1, GCornersAll);
       // The read portion (left of the position) in the full accent.
       if (w > 0) {
         graphics_context_set_fill_color(ctx, s_accent);
-        graphics_fill_rect(ctx, GRect(0, 0, w, PROGRESS_H), 0, GCornerNone);
+        graphics_fill_rect(ctx, GRect(0, 0, w, PROGRESS_H), 1, GCornersAll);
       }
       // The position dot: a big circle centered on the position, kept
       // inside the sidebar cap at the last article.
@@ -353,11 +354,12 @@ static void progress_pulse_start(void) {
   }
 }
 
-//! Black top bar with the stream name in accent (starts right below the
-//! progress line).
+//! Top bar with the stream name (starts right below the progress line).
+//! Theme-aware (P5): black crown in dark mode, white bar in light mode —
+//! the hairline divider below separates it from the page either way.
 static void top_bar_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
-  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_context_set_fill_color(ctx, theme_bg());
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 }
 
@@ -379,35 +381,76 @@ static void clock_tick_cb(void *data) {
   s_clock_timer = app_timer_register(60000, clock_tick_cb, NULL);
 }
 
+//! 2 x 2 1-bit checkerboard for the sidebar's dithered seam (P12): the
+//! strip where the accent bar meets the page gets a 2 px checkerboard. The
+//! firmware's bitblt TILES the source vertically, so drawing this 2x2 in a
+//! 2 x height rect covers the whole seam 1:1 (no scaling). One pattern
+//! serves both themes: GCompOpAnd paints the UNSET (white) pixels black
+//! (page in dark mode) and keeps the set pixels (accent); GCompOpOr paints
+//! the SET (black) pixels white (page in light mode) and keeps the unset.
+//! Pixel 0 of a row is the LSB (bitblt word order); row 0 has pixel 0 set.
+static const uint8_t s_dither_pbi[] = {
+  // row_size_bytes=4, info_flags = version 1 << 12, origin (0,0), size 2x2
+  0x04, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00,
+  // row 0: pixel0 set (black), pixel1 unset (white)
+  0x01, 0x00, 0x00, 0x00,
+  // row 1: pixel0 unset, pixel1 set
+  0x02, 0x00, 0x00, 0x00,
+};
+static GBitmap *s_dither_bitmap;
+
 //! Accent sidebar (full screen height, y = 0..s_win_h) holding three
 //! indicators VERTICALLY CENTERED beside the SELECT button, in the order
-//! star, circle, magnifier: favourite star (orange = starred, black = not),
-//! read/unread disc (filled white = unread, black = read) and the
-//! highlight-match magnifier (the alarm color when the current article
-//! matches a highlight word, plain black otherwise).
+//! star, circle, M/magnifier: favourite star (chrome-yellow + black outline
+//! when starred, black when not — P2), read/unread disc (filled white =
+//! unread, nothing when read — the classic unread-dot idiom, P2) and the
+//! highlight match (alarm-red rounded chip with a white "M" when the
+//! current article matches a highlight word, plain black magnifier
+//! otherwise — P1).
 static void sidebar_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   graphics_context_set_fill_color(ctx, s_accent);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 
+  // 2 px dithered seam at the inner (left) edge: the accent checkerboards
+  // into the page instead of cutting a hard line (the 2x2 pattern tiles
+  // vertically over the whole bar).
+  if (s_dither_bitmap) {
+    graphics_context_set_compositing_mode(ctx,
+                                          theme_dark() ? GCompOpAnd
+                                                       : GCompOpOr);
+    graphics_draw_bitmap_in_rect(ctx, s_dither_bitmap,
+                                 (GRect){ .origin = { 0, 0 },
+                                          .size = { 2, b.size.h } });
+    graphics_context_set_compositing_mode(ctx, GCompOpAssign);
+  }
+
   // 2-row clock in the sidebar's otherwise-wasted top: hours over minutes,
-  // accent digits on a black rounded chip.
+  // accent digits on a black rounded chip with a 1 px white border (the
+  // border keeps the black chip visible on dark accents).
   int16_t ccx = b.size.w / 2;
   time_t now = time(NULL);
   struct tm *lt = localtime(&now);
   if (lt) {
     char tbuf[4];
+    GRect chip = GRect(ccx - SIDEBAR_CLOCK_W / 2, SIDEBAR_CLOCK_TOP,
+                       SIDEBAR_CLOCK_W, SIDEBAR_CLOCK_H);
     graphics_context_set_fill_color(ctx, GColorBlack);
-    graphics_fill_rect(ctx, GRect(ccx - 11, 6, 22, 42), 4, GCornersAll);
+    graphics_fill_rect(ctx, chip, 4, GCornersAll);
+    graphics_context_set_stroke_color(ctx, GColorWhite);
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_draw_rect(ctx, chip);
     graphics_context_set_text_color(ctx, s_accent);
     snprintf(tbuf, sizeof(tbuf), "%d", lt->tm_hour);
     graphics_draw_text(ctx, tbuf, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                       GRect(ccx - 11, 7, 22, 20),
+                       GRect(ccx - SIDEBAR_CLOCK_W / 2, SIDEBAR_CLOCK_TOP + 1,
+                             SIDEBAR_CLOCK_W, 17),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
                        NULL);
     snprintf(tbuf, sizeof(tbuf), "%02d", lt->tm_min);
     graphics_draw_text(ctx, tbuf, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                       GRect(ccx - 11, 27, 22, 20),
+                       GRect(ccx - SIDEBAR_CLOCK_W / 2, SIDEBAR_CLOCK_TOP + 18,
+                             SIDEBAR_CLOCK_W, 17),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
                        NULL);
   }
@@ -419,24 +462,34 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
   int16_t cx = b.size.w / 2;
   int16_t y = SIDEBAR_ICON_TOP(s_win_h);
 
-  // 1. Favourite: a star — bright chrome-yellow when starred, black otherwise.
+  // 1. Favourite: a star — bright chrome-yellow with a black outline when
+  // starred (visible on any accent), plain black otherwise.
   if (s_star_path) {
     GPoint sc = GPoint(cx, y + SIDEBAR_STAR_H / 2);
     gpath_move_to(s_star_path, sc);
     graphics_context_set_fill_color(ctx,
                                     a->star ? GColorChromeYellow : GColorBlack);
     gpath_draw_filled(ctx, s_star_path);
+    if (a->star) {
+      graphics_context_set_stroke_color(ctx, GColorBlack);
+      graphics_context_set_stroke_width(ctx, 2);
+      gpath_draw_outline(ctx, s_star_path);
+    }
   }
   y += SIDEBAR_STAR_H + SIDEBAR_ICON_GAP;
 
-  // 2. Read/unread: a plain filled disc — white = unread, black = read.
-  GPoint c = GPoint(cx, y + SIDEBAR_DISC_D / 2);
-  graphics_context_set_fill_color(ctx, a->read ? GColorBlack : GColorWhite);
-  graphics_fill_circle(ctx, c, SIDEBAR_DISC_D / 2);
+  // 2. Read/unread: a plain filled white disc when unread; nothing when
+  // read (the classic unread-dot idiom — a black disc vanished on dark
+  // accents). The slot stays so the star and M never jump.
+  if (!a->read) {
+    GPoint c = GPoint(cx, y + SIDEBAR_DISC_D / 2);
+    graphics_context_set_fill_color(ctx, GColorWhite);
+    graphics_fill_circle(ctx, c, SIDEBAR_DISC_D / 2);
+  }
   y += SIDEBAR_DISC_D + SIDEBAR_ICON_GAP;
 
-  // 3. Match: a magnifying glass — alarm color when the current article has
-  // highlight-word matches, black otherwise.
+  // 3. Match: an alarm-red rounded chip with a white "M" when the current
+  // article has highlight-word matches, a plain black magnifier otherwise.
   bool matched = false;
   for (int i = 0; i < 2; i++) {
     const Page *pg = &s_pages[i];
@@ -445,13 +498,24 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
       break;
     }
   }
-  GColor mag_c = matched ? HL_ALARM_COLOR : GColorBlack;
-  graphics_context_set_stroke_color(ctx, mag_c);
-  graphics_context_set_stroke_width(ctx, 2);
-  GPoint center = GPoint(cx, y + SIDEBAR_MAG_H / 2 - 3);
-  graphics_draw_circle(ctx, center, 8);
-  graphics_draw_line(ctx, GPoint(center.x + 6, center.y + 6),
-                     GPoint(center.x + 11, center.y + 11));
+  if (matched) {
+    GRect chip = GRect(cx - 8, y + 1, 16, 16);
+    graphics_context_set_fill_color(ctx, HL_ALARM_COLOR);
+    graphics_fill_rect(ctx, chip, 4, GCornersAll);
+    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_draw_text(ctx, "M", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                       GRect(chip.origin.x, chip.origin.y - 2,
+                             chip.size.w, chip.size.h),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
+                       NULL);
+  } else {
+    graphics_context_set_stroke_color(ctx, GColorBlack);
+    graphics_context_set_stroke_width(ctx, 2);
+    GPoint center = GPoint(cx, y + SIDEBAR_MAG_H / 2 - 3);
+    graphics_draw_circle(ctx, center, 6);
+    graphics_draw_line(ctx, GPoint(center.x + 4, center.y + 4),
+                       GPoint(center.x + 8, center.y + 8));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -909,10 +973,12 @@ static void hl_build_layout(const HlBuildParams *p) {
 //! Replay a cached layout. ox/oy offset the text origin (the layer position);
 //! y_limit > 0 skips runs whose line ENDS at or below that absolute y (used
 //! by the header so a clamped long title never draws under the feed·time
-//! line).
+//! line). Highlighted runs draw their text in hl_text_c (usually base_c;
+//! the editorial header uses black text on the accent fill).
 static void hl_draw(GContext *ctx, const char *text, const HlLayout *lo,
                     int16_t ox, int16_t oy, GFont base_font, GFont hl_font,
-                    GColor base_c, GColor hl_c, int16_t y_limit) {
+                    GColor base_c, GColor hl_c, GColor hl_text_c,
+                    int16_t y_limit) {
   char scratch[HL_TOKEN_MAX + 1];
   for (int k = 0; k < lo->n; k++) {
     const HlRun *r = &lo->runs[k];
@@ -921,14 +987,14 @@ static void hl_draw(GContext *ctx, const char *text, const HlLayout *lo,
     }
     if (r->style) {
       // Text-marker highlight: fill the line box behind the run in the
-      // alarm color, then draw the words BOLD in the base text color.
+      // alarm color, then draw the words BOLD in the highlight text color.
       graphics_context_set_fill_color(ctx, hl_c);
       graphics_fill_rect(ctx, GRect(ox + r->x, oy + r->y + 1, r->w,
                                     lo->line_h - 2),
                          0, GCornerNone);
     }
     GFont f = r->style ? hl_font : base_font;
-    graphics_context_set_text_color(ctx, base_c);
+    graphics_context_set_text_color(ctx, r->style ? hl_text_c : base_c);
     // A very wide one-line box: glyphs start at the box origin and are never
     // wrapped; the layer bounds supply the real clip.
     GRect box = GRect(ox + r->x, oy + r->y, HL_MEASURE_W, lo->line_h);
@@ -980,7 +1046,7 @@ static void body_update(Layer *layer, GContext *ctx) {
   hl_draw(ctx, text, &p->body_layout, 0, 0,
           fonts_get_system_font(FONT_KEY_GOTHIC_18),
           fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-          theme_fg(), HL_ALARM_COLOR, 0);
+          theme_fg(), HL_ALARM_COLOR, theme_fg(), 0);
   if (p->idx == s_full_idx && s_full_fetching && !s_full_done) {
     graphics_context_set_text_color(ctx, theme_muted());
     graphics_draw_text(ctx, "Loading full text...",
@@ -1314,15 +1380,16 @@ static int header_page_idx(Layer *header) {
   return -1;
 }
 
-//! Accent header bar: always accent background with black text — the read
-//! state lives in the sidebar icons, not the colors. The heading is drawn
-//! from the cached highlight layout: the whole title keeps its bold look,
-//! highlighted words render in the alarm color + underlined (shared with the
-//! sidebar M badge and the body's matched words).
+//! Editorial header (P13/P4): page background — no accent band. The heading
+//! reads in theme_fg at GOTHIC_28_BOLD with accent-filled highlight words
+//! (black text on the accent, the app's accent-surface treatment), the
+//! feed·time meta sits at the bottom in muted GOTHIC_14, and a 2 px accent
+//! rule closes the header like a newspaper dateline. The read state lives
+//! in the sidebar icons, not the colors.
 static void header_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
 
-  graphics_context_set_fill_color(ctx, s_accent);
+  graphics_context_set_fill_color(ctx, theme_bg());
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 
   int pi = header_page_idx(layer);
@@ -1335,23 +1402,27 @@ static void header_update(Layer *layer, GContext *ctx) {
   if (!a) {
     return;
   }
-  GFont heading_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
-  // The feed·time line lives at the header's bottom; a clamped long title
-  // must not draw under it (lines ending in the meta zone are skipped).
+  GFont heading_font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
+  int16_t text_w = (int16_t)(b.size.w - SIDEBAR_W - 8);
+  // The feed·time line lives at the header's bottom, above the accent rule;
+  // a clamped long title must not draw under it.
   char meta[48];
   char t[16];
   format_reltime(t, sizeof(t), a->published);
   snprintf(meta, sizeof(meta), "%s · %s", a->feed, t);
-  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_context_set_text_color(ctx, theme_muted());
   graphics_draw_text(ctx, meta, fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                     GRect(4, b.size.h - 18, b.size.w - SIDEBAR_W - 8, 16),
+                     GRect(4, b.size.h - HEADER_META_H, text_w, 16),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  // The heading is never clamped (max_lines=0), so the y_limit only guards
-  // the meta line below. The LAST line's bottom is 2 + head_layout.height =
-  // b.size.h - 16; the old limit (b.size.h - 20) sat above it and dropped
-  // the last line of every heading (a 1-line title never rendered at all).
+  // The 2 px accent rule under the meta (editorial dateline).
+  graphics_context_set_fill_color(ctx, s_accent);
+  graphics_fill_rect(ctx, GRect(4, b.size.h - 3, text_w, 2), 0, GCornerNone);
+  // The heading: theme_fg text, accent-filled highlight words with black
+  // text. The LAST line's bottom is 2 + head_layout.height =
+  // b.size.h - HEADER_META_H + 2; the y_limit guards the meta line below.
   hl_draw(ctx, a->title, &p->head_layout, 4, 2, heading_font, heading_font,
-          GColorBlack, HL_ALARM_COLOR, (int16_t)(b.size.h - 16));
+          theme_fg(), s_accent, GColorBlack,
+          (int16_t)(b.size.h - HEADER_META_H + 2));
 }
 
 //! Build one article page (header + scrollable summary) into a fresh set of
@@ -1365,16 +1436,17 @@ static void page_build(Page *p, int32_t idx) {
   p->idx = idx;
 
   // Cached highlight layouts: heading (the FULL title, multi-line, no
-  // ellipsis cap; GOTHIC_18_BOLD throughout, highlighted words drawn white)
-  // and summary body (unlimited lines, base GOTHIC_18 with GOTHIC_18_BOLD
-  // for highlighted words).
+  // ellipsis cap; GOTHIC_28_BOLD throughout, highlighted words drawn on an
+  // accent fill) and summary body (unlimited lines, base GOTHIC_18 with
+  // GOTHIC_18_BOLD for highlighted words).
   GFont gothic18 = fonts_get_system_font(FONT_KEY_GOTHIC_18);
   GFont gothic18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  GFont gothic28b = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
   int16_t text_w = (int16_t)(s_win_w - SIDEBAR_W - 8);
   hl_build_layout(&(HlBuildParams){
     .text = a->title,
-    .base_font = gothic18b,
-    .hl_font = gothic18b,
+    .base_font = gothic28b,
+    .hl_font = gothic28b,
     .width = text_w,
     .max_lines = 0,
     .out = &p->head_layout,
@@ -1451,7 +1523,7 @@ static void page_destroy(Page *p) {
 //! Failsafe: if a page transition ever wedges (s_advancing stuck — e.g. an
 //! animation the OS never completes or never reports), release the locks so
 //! DOWN/UP/SELECT keep working. The watchdog is armed in transition_to and
-//! cancelled when the transition settles; a healthy 260 ms slide never
+//! cancelled when the transition settles; a healthy 300 ms slide never
 //! reaches it.
 static void transition_watchdog_cb(void *data) {
   s_transition_watchdog = NULL;
@@ -1545,7 +1617,8 @@ static void transition_anim_stopped(Animation *anim, bool finished, void *contex
 
 //! Start a transition in the given direction (+1 next, -1 previous): build
 //! the target page, park it off-screen on the entry side, then slide the
-//! current page out while the target slides in — both 260 ms ease-in-out,
+//! current page out while the target slides in — both 300 ms ease-out
+//! (P15: a slightly softer landing than the old 260 ms ease-in-out),
 //! one continuous sheet, no cut.
 static void transition_to(int8_t dir) {
   if (s_advancing) {
@@ -1575,8 +1648,8 @@ static void transition_to(int8_t dir) {
   s_from_a = layer_get_frame(cp->root);
   s_to_a = GRect(0, top - dir * s_view_h, s_win_w, s_view_h);
   s_anim_a = (Animation *)property_animation_create_layer_frame(cp->root, &s_from_a, &s_to_a);
-  animation_set_duration(s_anim_a, 260);
-  animation_set_curve(s_anim_a, AnimationCurveEaseInOut);
+  animation_set_duration(s_anim_a, 300);
+  animation_set_curve(s_anim_a, AnimationCurveEaseOut);
   animation_set_handlers(s_anim_a, (AnimationHandlers){
     .stopped = transition_anim_stopped,
   }, NULL);
@@ -1585,8 +1658,8 @@ static void transition_to(int8_t dir) {
   s_from_b = layer_get_frame(sp->root);
   s_to_b = GRect(0, top, s_win_w, s_view_h);
   s_anim_b = (Animation *)property_animation_create_layer_frame(sp->root, &s_from_b, &s_to_b);
-  animation_set_duration(s_anim_b, 260);
-  animation_set_curve(s_anim_b, AnimationCurveEaseInOut);
+  animation_set_duration(s_anim_b, 300);
+  animation_set_curve(s_anim_b, AnimationCurveEaseOut);
   animation_schedule(s_anim_b);
 }
 
@@ -1847,7 +1920,8 @@ static void timeline_window_load(Window *window) {
   window_set_background_color(window, theme_bg());
 
   s_star_path = gpath_create(&STAR_ICON_INFO);
-  s_status_check_path = gpath_create(&CHECK_PATH_INFO);
+  s_status_check_path = gpath_create(&UI_CHECK_PATH_INFO);
+  s_dither_bitmap = gbitmap_create_with_data(s_dither_pbi);
   s_cur = 0;
   s_pages[0].idx = -1;
   s_pages[1].idx = -1;
@@ -1862,12 +1936,14 @@ static void timeline_window_load(Window *window) {
   layer_set_update_proc(s_divider, divider_update);
   layer_add_child(root, s_divider);
 
-  s_top_text = text_layer_create(GRect(4, PROGRESS_H + 1, s_win_w - SIDEBAR_W - 8, TOP_BAR_H - 2));
-  text_layer_set_font(s_top_text, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  // Top bar: stream name in ROBOTO_CONDENSED_21 (narrower — more chars fit)
+  // in theme_fg (white on the black crown in dark, black on white in light).
+  s_top_text = text_layer_create(GRect(4, PROGRESS_H, s_win_w - SIDEBAR_W - 8, TOP_BAR_H));
+  text_layer_set_font(s_top_text, fonts_get_system_font(FONT_KEY_ROBOTO_CONDENSED_21));
   text_layer_set_text_alignment(s_top_text, GTextAlignmentLeft);
   text_layer_set_overflow_mode(s_top_text, GTextOverflowModeTrailingEllipsis);
   text_layer_set_background_color(s_top_text, GColorClear);
-  text_layer_set_text_color(s_top_text, GColorWhite); // white on the black bar (both modes)
+  text_layer_set_text_color(s_top_text, theme_fg());
   text_layer_set_text(s_top_text, s_title);
   layer_add_child(root, text_layer_get_layer(s_top_text));
 
@@ -1879,10 +1955,10 @@ static void timeline_window_load(Window *window) {
   layer_set_update_proc(s_prog_line, progress_update);
   layer_add_child(root, s_prog_line);
 
-  s_status = text_layer_create(bounds);
-  text_layer_set_font(s_status, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  s_status = text_layer_create(GRect(8, s_win_h / 2 - 30, s_win_w - 16, 48));
+  text_layer_set_font(s_status, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   text_layer_set_text_alignment(s_status, GTextAlignmentCenter);
-  text_layer_set_overflow_mode(s_status, GTextOverflowModeTrailingEllipsis);
+  text_layer_set_overflow_mode(s_status, GTextOverflowModeWordWrap);
   text_layer_set_background_color(s_status, GColorClear);
   text_layer_set_text_color(s_status, theme_muted());
   text_layer_set_text(s_status, s_loading ? "Loading..." : "All caught up");
@@ -1890,11 +1966,11 @@ static void timeline_window_load(Window *window) {
 
   // All-caught-up chrome: accent check above the text, hint below it. Both
   // are hidden by status_update() unless the stream is empty and loaded.
-  s_status_check = layer_create(GRect(s_win_w / 2 - 12, s_win_h / 2 - 46, 24, 18));
+  s_status_check = layer_create(GRect(s_win_w / 2 - 12, s_win_h / 2 - 52, 24, 18));
   layer_set_update_proc(s_status_check, status_check_update);
   layer_add_child(root, s_status_check);
 
-  s_status_hint = text_layer_create(GRect(0, s_win_h / 2 + 12, s_win_w, 16));
+  s_status_hint = text_layer_create(GRect(0, s_win_h / 2 + 24, s_win_w, 16));
   text_layer_set_font(s_status_hint, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_status_hint, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_status_hint, GTextOverflowModeTrailingEllipsis);
@@ -2321,7 +2397,7 @@ void timeline_apply_settings(void) {
     layer_mark_dirty(s_status_check); // accent check
   }
   if (s_top_text) {
-    text_layer_set_text_color(s_top_text, GColorWhite); // white on the black bar (both modes)
+    text_layer_set_text_color(s_top_text, theme_fg()); // theme bar text
   }
   if (s_top_bar) {
     layer_mark_dirty(s_top_bar);

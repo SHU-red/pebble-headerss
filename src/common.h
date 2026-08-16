@@ -8,7 +8,7 @@
 // startup so a device log can prove which build is running (line numbers
 // shift between commits and were ambiguous). Update on every release.
 // ---------------------------------------------------------------------------
-#define BUILD_COMMIT "258d8da"
+#define BUILD_COMMIT "c3eb29c"
 
 // ---------------------------------------------------------------------------
 // Shared limits and wire types. These are the single source of truth for the
@@ -107,6 +107,21 @@ typedef enum {
 int mark_mode(void);
 //! Persist a new auto-mark mode (clamped to the valid enum range).
 void mark_mode_set(int mode);
+
+// ---------------------------------------------------------------------------
+// Shared UI glyphs. GPathInfo statics declared here (per-TU copies, ~24 B
+// each) so the reader's all-caught-up check and the dialogs' success glyph
+// draw the same mark.
+// ---------------------------------------------------------------------------
+
+//! Closed check mark (~16 px), stroked white/accent where it is drawn.
+static const GPathInfo UI_CHECK_PATH_INFO = {
+  .num_points = 6,
+  .points = (GPoint[6]){
+    { -7, 2 }, { -1, 8 }, { 7, -3 },
+    { 5, -5 }, { -4, 2 }, { -8, 0 },
+  },
+};
 
 //! One article in the timeline ring buffer (heading + summary — there is no
 //! separate detail view; the list IS the reader).

@@ -31,6 +31,8 @@
 
 static Window *s_dialog_window;
 static Layer *s_dialog_bg;
+static Layer *s_dialog_glyph; // white status glyph above the text (P9)
+static GPath *s_dialog_check_path;
 static TextLayer *s_dialog_text;
 static AppTimer *s_timeout_timer;
 static AppTimer *s_dismiss_timer;
@@ -45,6 +47,17 @@ static char s_dialog_text_buf[192];
 static char s_working_label[32];
 static uint8_t s_pulse_phase;
 static GColor s_dialog_color;
+
+//! Glyph above the dialog text: none (working pulse), check (success),
+//! X (failure), question mark (orange confirm). Makes the color-only
+//! launcher dialogs scannable at a glance (P9).
+enum {
+  DIALOG_GLYPH_NONE = 0,
+  DIALOG_GLYPH_CHECK,
+  DIALOG_GLYPH_X,
+  DIALOG_GLYPH_QMARK,
+};
+static uint8_t s_dialog_glyph_type;
 
 // ---------------------------------------------------------------------------
 // Menus / windows
@@ -111,6 +124,33 @@ static void dialog_unload(Window *window);
 static void dialog_bg_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_fill_color(ctx, s_dialog_color);
   graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
+}
+
+//! White status glyph above the dialog text: check (success), X (failure),
+//! question mark (confirm), nothing while working (the pulsing label is the
+//! progress signal there).
+static void dialog_glyph_update_proc(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  GPoint c = GPoint(b.size.w / 2, b.size.h / 2);
+  if (s_dialog_glyph_type == DIALOG_GLYPH_CHECK) {
+    if (s_dialog_check_path) {
+      graphics_context_set_stroke_color(ctx, GColorWhite);
+      graphics_context_set_stroke_width(ctx, 4);
+      gpath_move_to(s_dialog_check_path, c);
+      gpath_draw_outline(ctx, s_dialog_check_path);
+    }
+  } else if (s_dialog_glyph_type == DIALOG_GLYPH_X) {
+    graphics_context_set_stroke_color(ctx, GColorWhite);
+    graphics_context_set_stroke_width(ctx, 4);
+    graphics_draw_line(ctx, GPoint(c.x - 9, c.y - 9), GPoint(c.x + 9, c.y + 9));
+    graphics_draw_line(ctx, GPoint(c.x - 9, c.y + 9), GPoint(c.x + 9, c.y - 9));
+  } else if (s_dialog_glyph_type == DIALOG_GLYPH_QMARK) {
+    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_draw_text(ctx, "?", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD),
+                       GRect(0, -4, b.size.w, b.size.h),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
+                       NULL);
+  }
 }
 
 static void dialog_confirm_select(ClickRecognizerRef rec, void *ctx) {
@@ -220,9 +260,18 @@ static void dialog_create(void) {
   s_dialog_color = GColorGreen;
   layer_add_child(root, s_dialog_bg);
 
-  s_dialog_text = text_layer_create(GRect(8, (bounds.size.h - 120) / 2,
-                                          bounds.size.w - 16, 120));
-  text_layer_set_font(s_dialog_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  // White status glyph, centered horizontally just above the text block
+  // (the text box sits 36 px below the glyph's top; both are centered as a
+  // single composition on the colored sheet).
+  s_dialog_glyph = layer_create(GRect(bounds.size.w / 2 - 14,
+                                      (bounds.size.h - 148) / 2 + 2, 28, 28));
+  layer_set_update_proc(s_dialog_glyph, dialog_glyph_update_proc);
+  layer_add_child(s_dialog_bg, s_dialog_glyph);
+  s_dialog_check_path = gpath_create(&UI_CHECK_PATH_INFO);
+
+  s_dialog_text = text_layer_create(GRect(8, (bounds.size.h - 148) / 2 + 36,
+                                          bounds.size.w - 16, 116));
+  text_layer_set_font(s_dialog_text, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
   text_layer_set_text_alignment(s_dialog_text, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_dialog_text, GTextOverflowModeWordWrap);
   text_layer_set_background_color(s_dialog_text, GColorClear);
@@ -242,6 +291,9 @@ static void dialog_prepare(GColor color, const char *text) {
   s_dialog_confirm = false;
   s_dialog_color = color;
   layer_mark_dirty(s_dialog_bg);
+  if (s_dialog_glyph) {
+    layer_mark_dirty(s_dialog_glyph);
+  }
   text_layer_set_text_color(s_dialog_text, GColorWhite);
   text_layer_set_text(s_dialog_text, text);
   vibes_short_pulse();
@@ -253,8 +305,9 @@ static void dialog_show_working(const char *text) {
     dialog_create();
   }
   s_dialog_final = false;
+  s_dialog_glyph_type = DIALOG_GLYPH_NONE; // the pulsing label is the progress signal
   text_layer_set_font(s_dialog_text,
-                      fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+                      fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
   snprintf(s_working_label, sizeof(s_working_label), "%s", text ? text : "");
   dialog_prepare(GColorGreen, s_working_label);
   s_pulse_phase = 3;
@@ -268,11 +321,15 @@ static void dialog_show_final(bool success, const char *text) {
     return;
   }
   s_dialog_final = true;
+  s_dialog_glyph_type = success ? DIALOG_GLYPH_CHECK : DIALOG_GLYPH_X;
   // Multiline results get the smaller font so all lines fit the dialog's
   // text area.
   if (text && strchr(text, '\n')) {
     text_layer_set_font(s_dialog_text,
                         fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  } else {
+    text_layer_set_font(s_dialog_text,
+                        fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
   }
   dialog_prepare(success ? GColorGreen : GColorRed, text);
   if (!success) {
@@ -286,6 +343,10 @@ static void dialog_show_confirm_text(const char *text) {
   if (!s_dialog_active) {
     dialog_create();
   }
+  s_dialog_glyph_type = DIALOG_GLYPH_QMARK;
+  // Multi-line question + hint stays readable at 24 bold under the glyph.
+  text_layer_set_font(s_dialog_text,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   snprintf(s_dialog_text_buf, sizeof(s_dialog_text_buf), "%s", text ? text : "");
   dialog_prepare(GColorOrange, s_dialog_text_buf);
   s_dialog_confirm = true;
@@ -294,6 +355,8 @@ static void dialog_show_confirm_text(const char *text) {
 static void dialog_unload(Window *window) {
   dialog_cancel_timers();
   text_layer_destroy(s_dialog_text);
+  layer_destroy(s_dialog_glyph);
+  gpath_destroy(s_dialog_check_path);
   layer_destroy(s_dialog_bg);
   window_destroy(s_dialog_window);
   s_dialog_window = NULL;
@@ -476,7 +539,7 @@ static uint16_t main_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
 //! keep a comfortable touch target.
 static int16_t main_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index,
                                     void *callback_context) {
-  return cell_index->row == 0 ? 15 : 46;
+  return cell_index->row == 0 ? 18 : 46;
 }
 
 //! Right-aligned unread badge as a filled accent pill (black count); on the
@@ -515,11 +578,13 @@ static void draw_badge(GContext *ctx, GRect b, int32_t unread, bool selected,
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
-//! Thin group divider line at the bottom of a menu row (muted color).
+//! Hairline group divider at the bottom of a menu row (muted color), inset
+//! 12 px so it clears the leading icon column — lines read as rhythm, not
+//! borders.
 static void draw_menu_divider(GContext *ctx, GRect b) {
   graphics_context_set_stroke_color(ctx, theme_muted());
-  graphics_context_set_stroke_width(ctx, 2);
-  graphics_draw_line(ctx, GPoint(0, b.size.h - 1),
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_line(ctx, GPoint(12, b.size.h - 1),
                      GPoint(b.size.w, b.size.h - 1));
 }
 
@@ -556,6 +621,45 @@ static int16_t draw_nav_icon(GContext *ctx, const FeedNode *node,
   return text_x + 24;
 }
 
+//! RSS-fan glyph (three quarter-arcs from a corner + a dot), drawn in the
+//! accent — the first-run empty state's own mark instead of the stock cell.
+static void draw_rss_fan(GContext *ctx, GPoint cc, GColor c) {
+  // Quarter-arc lookup: direction cosines/sines scaled by 8 at 180°, 150°,
+  // 120°, 90° (the fan sweeps from pointing left up to pointing up).
+  static const int8_t T[4][2] = { { -8, 0 }, { -7, 4 }, { -4, 7 }, { 0, 8 } };
+  graphics_context_set_stroke_color(ctx, c);
+  graphics_context_set_stroke_width(ctx, 2);
+  for (int r = 3; r <= 9; r += 3) {
+    for (int i = 1; i < 4; i++) {
+      GPoint a = GPoint(cc.x - 8 + r * T[i - 1][0] / 8, cc.y - r * T[i - 1][1] / 8);
+      GPoint z = GPoint(cc.x - 8 + r * T[i][0] / 8, cc.y - r * T[i][1] / 8);
+      graphics_draw_line(ctx, a, z);
+    }
+  }
+  graphics_context_set_fill_color(ctx, c);
+  graphics_fill_circle(ctx, GPoint(cc.x - 8, cc.y), 2);
+}
+
+//! First-run empty state: a centered accent RSS fan + "No feeds yet" +
+//! a muted setup hint — the reader's all-caught-up styling on the root
+//! menu, instead of the stock two-line cell.
+static void draw_empty_state(GContext *ctx, GRect b, bool selected) {
+  graphics_context_set_fill_color(ctx, selected ? s_accent : theme_bg());
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  GColor ic = selected ? GColorBlack : s_accent;
+  draw_rss_fan(ctx, GPoint(20, b.size.h / 2 + 6), ic);
+  graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_fg());
+  graphics_draw_text(ctx, "No feeds yet",
+                     fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                     GRect(34, 2, b.size.w - 40, 22),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_muted());
+  graphics_draw_text(ctx, "Open the phone app settings",
+                     fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                     GRect(34, 24, b.size.w - 40, 16),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
 static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
                           void *callback_context) {
   uint16_t row = cell_index->row;
@@ -570,15 +674,16 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
     int16_t cy = bounds.size.h / 2;
     graphics_context_set_fill_color(ctx, s_accent);
     for (int i = -1; i <= 1; i++) {
-      graphics_fill_circle(ctx, GPoint(cx + i * 6, cy), 2);
+      graphics_fill_circle(ctx, GPoint(cx + i * 8, cy), 3);
     }
     return;
   }
 
   int root = tree_root_count();
   if (root == 0) {
-    menu_cell_basic_draw(ctx, cell_layer, "No feeds yet",
-                         "Open the phone app settings", NULL);
+    bool selected = menu_layer_is_index_selected(s_main_menu,
+                                                 (MenuIndex *)cell_index);
+    draw_empty_state(ctx, layer_get_bounds(cell_layer), selected);
     return;
   }
 
@@ -898,6 +1003,11 @@ static uint16_t sub_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
   return 7;
 }
 
+static int16_t sub_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index,
+                                   void *callback_context) {
+  return 46; // uniform row rhythm with the root/folder menus (P8)
+}
+
 static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
                          void *callback_context) {
   if (cell_index->row == 0) {
@@ -973,6 +1083,7 @@ static void sub_window_load(Window *window) {
   s_sub_menu = menu_layer_create(bounds);
   menu_layer_set_callbacks(s_sub_menu, NULL, (MenuLayerCallbacks){
     .get_num_rows = sub_get_num_rows,
+    .get_cell_height = sub_get_cell_height,
     .draw_row = sub_draw_row,
     .select_click = sub_select_cb,
   });
@@ -1019,7 +1130,7 @@ static uint16_t mode_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
 
 static int16_t mode_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index,
                                     void *callback_context) {
-  return 44;
+  return 46; // uniform row rhythm with the root/folder menus (P8)
 }
 
 static void mode_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
@@ -1109,7 +1220,7 @@ static uint16_t ctx_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
 
 static int16_t ctx_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index,
                                    void *callback_context) {
-  return 44;
+  return 46; // uniform row rhythm with the root/folder menus (P8)
 }
 
 static void ctx_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,

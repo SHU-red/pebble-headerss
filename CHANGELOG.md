@@ -16,6 +16,37 @@ articles full-screen, mark read, star favourites, highlight words.
   mark-all-read
 - Highlight words survive reinstalls
 
+## 0.3.34
+
+**Tier A + Tier B design overhaul** (the full idea list, implemented):
+
+- **Editorial reader header**: the saturated accent band is gone — the heading
+  reads on the page background in **GOTHIC_28_BOLD** (theme color) with
+  accent-filled highlight words, the feed·time meta is muted GOTHIC_14, and a
+  2 px accent rule closes the header like a newspaper dateline (P13/P4).
+- **Type hierarchy**: article headings 18 → 28 bold, the top-bar stream name
+  is ROBOTO_CONDENSED_21, dialogs one-liners are 28 bold, the all-caught-up
+  status is 24 bold (P4).
+- **Light mode is coherent**: the reader's top bar is now theme-aware —
+  white with black text in light mode, the black crown stays in dark (P5).
+- **Slimmer sidebar (26 → 20 px)**: the reading column is wider; the clock
+  chip got a 1 px white border (visible on any accent) and the 
+  star/disc/M stack is re-spaced — the 144×168 clock/star overlap is gone
+  (P14/P11/P3).
+- **State legibility**: the read disc is now the classic unread-dot idiom
+  (white when unread, nothing when read — no more invisible black dot), the
+  starred star gets a black outline so it pops on any accent, and the match
+  indicator is an alarm-red rounded chip with a white "M" (P2/P1).
+- **Micro-refinement**: 1 px inset menu dividers, rounded progress caps,
+  chunkier launcher strip (18 px, r3 dots), uniform 46 px menu rows,
+  dialog glyphs (check / X / question mark), a custom RSS-fan empty state,
+  a 2 px checkerboard dither seam at the sidebar's inner edge, and a softer
+  300 ms ease-out page transition (P6–P10/P12/P15).
+- **Bugfix**: the launch restore now applies highlight words — it sent
+  AccentColor/TouchEnabled/HighlightWords in one message and the settings
+  branch returned before the words were processed, so a reinstall never
+  restored your matchwords on the watch.
+
 ## 0.3.33
 
 - **Theme on the watch**: the sub-menu has a **Theme** row — one tap cycles
