@@ -1237,6 +1237,8 @@ static void open_context_menu(const FeedNode *feed) {
 // ---------------------------------------------------------------------------
 
 static void init(void) {
+  APP_LOG(APP_LOG_LEVEL_INFO, "build: HeadeRSS commit " BUILD_COMMIT
+          " (" __DATE__ " " __TIME__ ")");
   storage_load();
   proto_init(); // registers handlers + app_message_open(4096, 1024)
 

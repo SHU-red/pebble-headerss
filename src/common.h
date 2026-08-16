@@ -4,6 +4,13 @@
 #include <pebble.h>
 
 // ---------------------------------------------------------------------------
+// Build identity: the exact commit this binary was built from, logged at
+// startup so a device log can prove which build is running (line numbers
+// shift between commits and were ambiguous). Update on every release.
+// ---------------------------------------------------------------------------
+#define BUILD_COMMIT "5332650"
+
+// ---------------------------------------------------------------------------
 // Shared limits and wire types. These are the single source of truth for the
 // buffer budgets of the whole app (tree cache, article ring buffer, AppMessage
 // batching) — keep them in sync with the phone-side protocol in package.json.

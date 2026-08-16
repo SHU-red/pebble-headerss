@@ -172,9 +172,10 @@ typedef struct {
 // One article page: everything that slides during a transition. Two pages
 // exist so the transition can animate them against each other.
 typedef struct {
-  Layer *root;        // container layer (slides)
+  Layer *root;        // container layer (slides during transitions)
+  Layer *content;     // scroll wrapper: header+body, moved by FRAME
+  int16_t content_h;  // content wrapper height (hh + 2 + body_h)
   Layer *header;      // accent header (dynamic height)
-  ScrollLayer *scroll; // summary body
   Layer *body;        // custom highlight body layer, recreated per page
   HlLayout body_layout; // cached summary runs (per article / words-change)
   HlLayout head_layout; // cached heading runs (full title, multi-line)
@@ -946,9 +947,11 @@ static void body_update(Layer *layer, GContext *ctx) {
 }
 
 //! Size the page's scrollable unit: the accent header (full wrapped heading
-//! + feed·time line) with the summary body stacked below it; the scroll
-//! content covers both so they scroll together. Adds room for the
-//! "Loading full text..." hint when a fetch is in flight.
+//! + feed·time line) with the summary body stacked below it; the content
+//! wrapper covers both so they scroll together. Adds room for the
+//! "Loading full text..." hint when a fetch is in flight. The wrapper is
+//! moved by FRAME (page_set_offset) — never by a ScrollLayer's bounds
+//! origin, which advances the offset state but does not render on emery.
 static void page_resize(Page *p) {
   int16_t hh = (int16_t)(p->head_layout.height + HEADER_META_H);
   int16_t body_h = p->body_layout.height + 4; // 2 px pad + 2 px air
@@ -958,15 +961,42 @@ static void page_resize(Page *p) {
   layer_set_frame(p->header, GRect(0, 0, s_win_w, hh));
   layer_set_frame(p->body, GRect(4, hh + 1, s_win_w - SIDEBAR_W - 8, body_h));
   int32_t total = hh + 2 + body_h;
-  GSize content = scroll_layer_get_content_size(p->scroll);
-  if (content.h != total) {
-    scroll_layer_set_content_size(p->scroll, GSize(s_win_w, total));
+  int16_t old_h = p->content_h;
+  if (old_h != total) {
+    p->content_h = (int16_t)total;
     APP_LOG(APP_LOG_LEVEL_INFO, "layout: page idx=%ld content %d -> %d (head %d body %d)",
-            (long)p->idx, content.h, (int)total, hh,
+            (long)p->idx, old_h, (int)total, hh,
             (int)p->body_layout.height);
   }
+  // Preserve the current offset; re-clamp when the content grew/shrunk so a
+  // resize can never strand the offset past the new bottom.
+  int32_t off = layer_get_frame(p->content).origin.y;
+  int32_t min_y = s_view_h - total;
+  if (off < min_y) {
+    off = min_y;
+  }
+  if (off > 0) {
+    off = 0;
+  }
+  layer_set_frame(p->content, GRect(0, off, s_win_w, (int16_t)total));
   layer_mark_dirty(p->header);
   layer_mark_dirty(p->body);
+}
+
+//! Manual scroll: move the page's content wrapper by frame — the only
+//! movement mechanism proven to render on the user's emery (settles move
+//! page roots with layer_set_frame; the ScrollLayer's bounds-origin path
+//! never redraws there). Single clamp authority for the scroll offset.
+static void page_set_offset(Page *p, int32_t y) {
+  int32_t min_y = s_view_h - p->content_h;
+  if (y < min_y) {
+    y = min_y;
+  }
+  if (y > 0) {
+    y = 0;
+  }
+  layer_set_frame(p->content, GRect(0, y, s_win_w, p->content_h));
+  layer_mark_dirty(p->content);
 }
 
 // ---------------------------------------------------------------------------
@@ -1277,24 +1307,24 @@ static void page_build(Page *p, int32_t idx) {
   p->root = layer_create(GRect(0, 0, s_win_w, s_view_h));
   layer_add_child(s_page_area, p->root);
 
-  p->scroll = scroll_layer_create(GRect(0, 0, s_win_w, s_view_h));
-  scroll_layer_set_shadow_hidden(p->scroll, true);
-  layer_add_child(p->root, scroll_layer_get_layer(p->scroll));
+  // Manual scroll wrapper (no ScrollLayer): a plain layer holding the
+  // header + body, moved by FRAME via page_set_offset. The ScrollLayer was
+  // abandoned because it moves its internal content sub-layer by BOUNDS
+  // ORIGIN — the offset state advances but the screen never redraws on the
+  // user's emery; layer_set_frame is the mechanism the settles prove works.
+  // Clipping is the layer default (clips=true), identical to the old view.
+  p->content = layer_create(GRect(0, 0, s_win_w, 1));
+  layer_add_child(p->root, p->content);
 
   p->header = layer_create(GRect(0, 0, s_win_w, 1));
   layer_set_update_proc(p->header, header_update);
-  // scroll_layer_add_child (NOT layer_add_child onto the scroll's own layer):
-  // the scroll layer only moves its internal "content" sub-layer — children
-  // added with the generic layer_add_child sit outside it and never scroll
-  // (the offset state changed, the screen stayed put — the reader's core bug).
-  scroll_layer_add_child(p->scroll, p->header);
+  layer_add_child(p->content, p->header);
 
   p->body = layer_create(GRect(4, 1, s_win_w - SIDEBAR_W - 8, 1));
   layer_set_update_proc(p->body, body_update);
-  scroll_layer_add_child(p->scroll, p->body);
-  page_resize(p); // sizes header + body + the scroll content (+ hint)
-
-  scroll_layer_set_content_offset(p->scroll, GPointZero, false);
+  layer_add_child(p->content, p->body);
+  p->content_h = 1;
+  page_resize(p); // sizes header + body + the content wrapper (+ hint)
 }
 
 static void page_destroy(Page *p) {
@@ -1309,17 +1339,11 @@ static void page_destroy(Page *p) {
     p->body_layout.runs = p->body_layout.static_runs;
     p->body_layout.dyn = false;
   }
-  if (p->body) {
-    layer_destroy(p->body);
-    p->body = NULL;
-  }
-  if (p->scroll) {
-    scroll_layer_destroy(p->scroll);
-    p->scroll = NULL;
-  }
-  if (p->header) {
-    layer_destroy(p->header);
+  if (p->content) {
+    layer_destroy(p->content); // destroys the header + body children too
+    p->content = NULL;
     p->header = NULL;
+    p->body = NULL;
   }
   if (p->root) {
     layer_destroy(p->root);
@@ -1519,16 +1543,15 @@ static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing) {
     return;
   }
-  ScrollLayer *scroll = cur_page()->scroll;
-  GPoint offset = scroll_layer_get_content_offset(scroll);
-  APP_LOG(APP_LOG_LEVEL_INFO, "nav: UP off=%d", offset.y);
-  if (offset.y < 0) {
-    GRect frame = layer_get_frame(scroll_layer_get_layer(scroll));
-    int32_t target = offset.y + (frame.size.h - 24);
+  Page *p = cur_page();
+  int32_t off = layer_get_frame(p->content).origin.y;
+  APP_LOG(APP_LOG_LEVEL_INFO, "nav: UP off=%ld", (long)off);
+  if (off < 0) {
+    int32_t target = off + (s_view_h - 24);
     if (target > 0) {
       target = 0;
     }
-    scroll_layer_set_content_offset(scroll, GPoint(0, target), false);
+    page_set_offset(p, target);
   } else {
     maybe_regress();
   }
@@ -1545,17 +1568,16 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
             (long)s_count, (int)s_advancing, (int)s_advance_guard);
     return;
   }
-  ScrollLayer *scroll = cur_page()->scroll;
-  GRect frame = layer_get_frame(scroll_layer_get_layer(scroll));
-  GSize content = scroll_layer_get_content_size(scroll);
-  GPoint offset = scroll_layer_get_content_offset(scroll);
-  // The SDK clips the content offset to [frame.h - content.h, 0] — the
-  // content origin: 0 at the top, NEGATIVE when scrolled, frame.h-content.h
-  // at the very bottom. "At the bottom" is offset.y <= frame.h-content.h.
-  bool at_bottom = (offset.y <= frame.size.h - content.h + 2);
+  Page *p = cur_page();
+  int32_t off = layer_get_frame(p->content).origin.y;
+  int32_t content_h = p->content_h;
+  // The offset is clamped to [s_view_h - content_h, 0] — the content
+  // origin: 0 at the top, NEGATIVE when scrolled, s_view_h - content_h at
+  // the very bottom. "At the bottom" is off <= s_view_h - content_h.
+  bool at_bottom = (off <= s_view_h - content_h + 2);
   APP_LOG(APP_LOG_LEVEL_INFO,
-          "nav: DOWN off=%d frame=%d cont=%d bottom=%d",
-          offset.y, frame.size.h, content.h, (int)at_bottom);
+          "nav: DOWN off=%ld frame=%d cont=%ld bottom=%d",
+          (long)off, s_view_h, (long)content_h, (int)at_bottom);
   if (at_bottom) {
     maybe_advance();
     return;
@@ -1568,7 +1590,7 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   // preview is short BECAUSE the fetch is in flight, not because the article
   // is short — advancing then would skip the article the user is reading.
   // Hold; the (repeating) press scrolls once the full text lands.
-  if (content.h <= frame.size.h + 8) {
+  if (content_h <= s_view_h + 8) {
     bool fetching_here = (s_full_idx == s_idx && s_full_fetching &&
                           !s_full_done);
     if (fetching_here) {
@@ -1576,22 +1598,22 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
               "nav: fetch in flight, preview fits — hold");
       return;
     }
-    APP_LOG(APP_LOG_LEVEL_INFO, "nav: fits (cont=%d frame=%d), advance",
-            content.h, frame.size.h);
+    APP_LOG(APP_LOG_LEVEL_INFO, "nav: fits (cont=%ld frame=%d), advance",
+            (long)content_h, s_view_h);
     maybe_advance();
     return;
   }
   // Page-down: ~3/4 viewport per press (a small overlap keeps the previous
   // screen's last line visible for context); the final press lands exactly
   // on the bottom so the last word is clearly visible.
-  int32_t step = (frame.size.h * 3) / 4;
-  int32_t target = offset.y - step;
-  int32_t min_y = frame.size.h - content.h;
+  int32_t step = (s_view_h * 3) / 4;
+  int32_t target = off - step;
+  int32_t min_y = s_view_h - content_h;
   if (target < min_y) {
     target = min_y;
   }
-  APP_LOG(APP_LOG_LEVEL_INFO, "nav: page-down %d -> %d", offset.y, (int)target);
-  scroll_layer_set_content_offset(scroll, GPoint(0, target), false);
+  APP_LOG(APP_LOG_LEVEL_INFO, "nav: page-down %ld -> %ld", (long)off, (long)target);
+  page_set_offset(p, target);
 }
 
 //! SELECT toggles the current article's read state (unread -> mark read via

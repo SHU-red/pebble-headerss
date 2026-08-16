@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.26
+
+- **The article scrolls by layer frame — proven to render on the Time 2**:
+  the ScrollLayer was abandoned. It moves its content sub-layer by mutating
+  the sub-layer's *bounds origin*; on the user's emery that path advances
+  the offset state (logs: -150 → -2668, bottom=1, settle) but never redraws
+  the screen, while app-owned `layer_set_frame` animations (settles) do
+  render. The reader now scrolls manually: header + summary live in a plain
+  content wrapper layer moved by `layer_set_frame` — the mechanism the
+  device already proves renders. Offset clamping, fit/bottom/advance logic
+  and the full-summary resize re-clamp are unchanged; ScrollLayer objects
+  are gone (~400–500 B heap per page on the 64 KB class).
+- **Build identity in the log**: startup now logs `build: HeadeRSS commit
+  <hash>` so a device log can prove which binary is running.
+
 ## 0.3.25
 
 - **HOLD UP/DOWN jumps to the previous/next article** (tap still
