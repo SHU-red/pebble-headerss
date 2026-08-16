@@ -237,42 +237,6 @@ static void status_update(void);
 static void status_check_update(Layer *layer, GContext *ctx);
 static void transition_anim_stopped(Animation *anim, bool finished, void *context);
 
-// Debug heartbeat (temporary): a 5 s state dump while the reader is open.
-// The dump stops when the app hangs (the event loop never returns to the
-// timer) or the app faults — the last line before the silence is the exact
-// state at the failure.
-static AppTimer *s_dbg_timer;
-
-static void dbg_heartbeat_cb(void *data) {
-  s_dbg_timer = NULL;
-  int16_t off = 0;
-  if (s_count > 0 && cur_page() && cur_page()->scroll) {
-    off = scroll_layer_get_content_offset(cur_page()->scroll).y;
-  }
-  APP_LOG(APP_LOG_LEVEL_INFO,
-          "dbg: idx=%ld n=%ld load=%d all=%d adv=%d guard=%d "
-          "full=(%ld,%u,%d,%d) scroll=%d heap=%d",
-          (long)s_idx, (long)s_count, (int)s_loading, (int)s_loaded_all,
-          (int)s_advancing, (int)s_advance_guard,
-          (long)s_full_idx, (unsigned)s_full_len,
-          (int)s_full_done, (int)s_full_fetching,
-          (int)off, (int)heap_bytes_free());
-  s_dbg_timer = app_timer_register(5000, dbg_heartbeat_cb, NULL);
-}
-
-static void dbg_heartbeat_start(void) {
-  if (!s_dbg_timer) {
-    s_dbg_timer = app_timer_register(5000, dbg_heartbeat_cb, NULL);
-  }
-}
-
-static void dbg_heartbeat_stop(void) {
-  if (s_dbg_timer) {
-    app_timer_cancel(s_dbg_timer);
-    s_dbg_timer = NULL;
-  }
-}
-
 //! The article currently under the reader, or NULL when the buffer is empty.
 static const Article *current_article(void) {
   if (s_idx < 0 || s_idx >= s_count) {
@@ -1250,7 +1214,6 @@ static void header_update(Layer *layer, GContext *ctx) {
   if (!a) {
     return;
   }
-
   GFont heading_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
   // The feed·time line lives at the header's bottom; a clamped long title
   // must not draw under it (lines ending in the meta zone are skipped).
@@ -1320,11 +1283,15 @@ static void page_build(Page *p, int32_t idx) {
 
   p->header = layer_create(GRect(0, 0, s_win_w, 1));
   layer_set_update_proc(p->header, header_update);
-  layer_add_child(scroll_layer_get_layer(p->scroll), p->header);
+  // scroll_layer_add_child (NOT layer_add_child onto the scroll's own layer):
+  // the scroll layer only moves its internal "content" sub-layer — children
+  // added with the generic layer_add_child sit outside it and never scroll
+  // (the offset state changed, the screen stayed put — the reader's core bug).
+  scroll_layer_add_child(p->scroll, p->header);
 
   p->body = layer_create(GRect(4, 1, s_win_w - SIDEBAR_W - 8, 1));
   layer_set_update_proc(p->body, body_update);
-  layer_add_child(scroll_layer_get_layer(p->scroll), p->body);
+  scroll_layer_add_child(p->scroll, p->body);
   page_resize(p); // sizes header + body + the scroll content (+ hint)
 
   scroll_layer_set_content_offset(p->scroll, GPointZero, false);
@@ -1488,8 +1455,6 @@ static void transition_to(int8_t dir) {
   mark_timer_cancel(); // leaving the current article: drop its auto-mark
   transition_watchdog_cancel();
   s_transition_watchdog = app_timer_register(2000, transition_watchdog_cb, NULL);
-  APP_LOG(APP_LOG_LEVEL_INFO, "nav: transition start %ld -> %ld dir=%d",
-          (long)s_idx, (long)nidx, (int)dir);
 
   int16_t top = 0; // settled y inside the page area (which itself sits below
                    // the progress line + top bar)
@@ -1564,9 +1529,7 @@ static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
       target = 0;
     }
     scroll_layer_set_content_offset(scroll, GPoint(0, target), false);
-    APP_LOG(APP_LOG_LEVEL_INFO, "nav: UP done off=%d", (int)target);
   } else {
-    APP_LOG(APP_LOG_LEVEL_INFO, "nav: UP at top -> regress");
     maybe_regress();
   }
 }
@@ -1594,8 +1557,6 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
           "nav: DOWN off=%d frame=%d cont=%d bottom=%d",
           offset.y, frame.size.h, content.h, (int)at_bottom);
   if (at_bottom) {
-    APP_LOG(APP_LOG_LEVEL_INFO, "nav: bottom (off=%d min=%d) -> advance",
-            offset.y, frame.size.h - content.h);
     maybe_advance();
     return;
   }
@@ -1631,9 +1592,6 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   }
   APP_LOG(APP_LOG_LEVEL_INFO, "nav: page-down %d -> %d", offset.y, (int)target);
   scroll_layer_set_content_offset(scroll, GPoint(0, target), false);
-  GPoint after = scroll_layer_get_content_offset(scroll);
-  APP_LOG(APP_LOG_LEVEL_INFO, "nav: page-down done off=%d (target=%d min=%d)",
-          (int)after.y, (int)target, (int)min_y);
 }
 
 //! SELECT toggles the current article's read state (unread -> mark read via
@@ -1750,10 +1708,6 @@ static void timeline_window_load(Window *window) {
   s_win_h = bounds.size.h;
   s_view_h = s_win_h - TOP_BAR_H - PROGRESS_H - DIVIDER_H;
   s_root = root;
-
-  APP_LOG(APP_LOG_LEVEL_INFO, "win: timeline load w=%d h=%d view=%d",
-          (int)bounds.size.w, (int)bounds.size.h, (int)s_view_h);
-  dbg_heartbeat_start();
 
   window_set_background_color(window, theme_bg());
 
@@ -1876,8 +1830,6 @@ static void timeline_close(void) {
 }
 
 static void timeline_window_unload(Window *window) {
-  APP_LOG(APP_LOG_LEVEL_INFO, "win: timeline unload");
-  dbg_heartbeat_stop();
   timeline_close();
   if (s_star_path) {
     gpath_destroy(s_star_path);

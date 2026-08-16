@@ -392,10 +392,7 @@ function sendItemChain(items, index, continuation, generation, retries) {
   dict.ItemTime = item.time;
   dict.ItemRead = item.read;
   dict.ItemStar = item.star;
-  var t0 = Date.now();
   Pebble.sendAppMessage(dict, function () {
-    console.log('items: ack ' + (index + 1) + '/' + items.length +
-      ' ' + String(item.id).slice(0, 12) + ' in ' + (Date.now() - t0) + 'ms');
     sendItemChain(items, index + 1, continuation, generation, 0);
   }, function (err) {
     if (retries < 2) {
@@ -551,10 +548,7 @@ function sendSummaryChunks(chunks, index, generation, id, retries) {
     return;
   }
   var dict = { ItemId: id, FullSummary: chunks[index] };
-  var t0 = Date.now();
   Pebble.sendAppMessage(dict, function () {
-    console.log('summary: ack chunk ' + (index + 1) + '/' + chunks.length +
-      ' ' + chunks[index].length + 'B in ' + (Date.now() - t0) + 'ms');
     sendSummaryChunks(chunks, index + 1, generation, id, 0);
   }, function (err) {
     if (retries < 2) {

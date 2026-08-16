@@ -35,15 +35,7 @@ static AppTimer *s_summary_retry_timer;
 static uint8_t s_summary_retries;
 static char s_summary_retry_id[24];
 
-// ---------------------------------------------------------------------------
-// Debug instrumentation (temporary): a monotone sequence number across all
-// outbox sends + inbox receipts, so the user's log shows exactly which
-// message the app was on when input stopped being processed. The outbox
-// tags identify the flow (tree/items/summary/star/markbatch/...).
-// ---------------------------------------------------------------------------
-static uint16_t s_msg_seq;
-#define DBG_OUT(tag) \
-  APP_LOG(APP_LOG_LEVEL_INFO, "msg: OUT #%u %s", (unsigned)++s_msg_seq, tag)
+
 
 //! Send the queued ids as one CSV MarkRead payload, then reset the queue.
 static void mark_send_batch(void) {
@@ -68,7 +60,6 @@ static void mark_send_batch(void) {
     dict_write_cstring(iter, MESSAGE_KEY_MarkRead, csv);
     dict_write_end(iter);
     app_message_outbox_send();
-    DBG_OUT("markbatch");
   } else {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Mark-read batch dropped (outbox busy)");
   }
@@ -120,9 +111,6 @@ void proto_request_tree(void) {
   if (res == APP_MSG_OK) {
     dict_write_int32(iter, MESSAGE_KEY_FetchTree, 1);
     res = app_message_outbox_send();
-    if (res == APP_MSG_OK) {
-      DBG_OUT("tree");
-    }
   }
   if (res != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchTree (%d)", (int)res);
@@ -145,9 +133,6 @@ void proto_request_items(const char *stream, const char *cont) {
     dict_write_int32(iter, MESSAGE_KEY_FetchN, PAGE_SIZE);
     dict_write_int32(iter, MESSAGE_KEY_UnreadOnly, s_unread_only ? 1 : 0);
     res = app_message_outbox_send();
-    if (res == APP_MSG_OK) {
-      DBG_OUT("items");
-    }
   }
   if (res != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchItems (%d)", (int)res);
@@ -162,9 +147,6 @@ void proto_request_user_info(void) {
   if (res == APP_MSG_OK) {
     dict_write_int32(iter, MESSAGE_KEY_FetchUserInfo, 1);
     res = app_message_outbox_send();
-    if (res == APP_MSG_OK) {
-      DBG_OUT("userinfo");
-    }
   }
   if (res != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchUserInfo (%d)", (int)res);
@@ -179,9 +161,6 @@ void proto_star(const char *id, bool on) {
     dict_write_cstring(iter, MESSAGE_KEY_StarItem, id ? id : "");
     dict_write_int32(iter, MESSAGE_KEY_StarOn, on ? 1 : 0);
     res = app_message_outbox_send();
-    if (res == APP_MSG_OK) {
-      DBG_OUT("star");
-    }
   }
   if (res != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send StarItem (%d)", (int)res);
@@ -195,9 +174,6 @@ void proto_mark_all_read(const char *stream) {
   if (res == APP_MSG_OK) {
     dict_write_cstring(iter, MESSAGE_KEY_MarkAllRead, stream ? stream : "");
     res = app_message_outbox_send();
-    if (res == APP_MSG_OK) {
-      DBG_OUT("markall");
-    }
   }
   if (res != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send MarkAllRead (%d)", (int)res);
@@ -232,7 +208,6 @@ static void summary_retry_cb(void *data) {
     dict_write_cstring(iter, MESSAGE_KEY_FetchSummary, s_summary_retry_id);
     dict_write_end(iter);
     app_message_outbox_send();
-    DBG_OUT("summary-retry");
   }
   APP_LOG(APP_LOG_LEVEL_INFO, "summary: request retried -> %d", (int)res);
 }
@@ -251,7 +226,6 @@ void proto_request_summary(const char *id) {
     dict_write_cstring(iter, MESSAGE_KEY_FetchSummary, s_summary_retry_id);
     dict_write_end(iter);
     app_message_outbox_send();
-    DBG_OUT("summary");
     APP_LOG(APP_LOG_LEVEL_INFO, "summary: request sent (%s)",
             s_summary_retry_id);
     return;
@@ -274,9 +248,6 @@ void proto_mark_unread(const char *id) {
   if (res == APP_MSG_OK) {
     dict_write_cstring(iter, MESSAGE_KEY_MarkUnread, id ? id : "");
     res = app_message_outbox_send();
-    if (res == APP_MSG_OK) {
-      DBG_OUT("unread");
-    }
   }
   if (res != APP_MSG_OK) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send MarkUnread (%d)", (int)res);
@@ -299,7 +270,6 @@ void proto_reply_config(void) {
     dict_write_int32(iter, MESSAGE_KEY_ProgressLine, setting_progress() ? 1 : 0);
     dict_write_end(iter);
     app_message_outbox_send();
-    DBG_OUT("config");
   }
 }
 
@@ -309,7 +279,6 @@ void proto_reply_config(void) {
 
 void proto_handle_inbox(DictionaryIterator *iter) {
   Tuple *t;
-  APP_LOG(APP_LOG_LEVEL_INFO, "msg: IN #%u", (unsigned)++s_msg_seq);
 
   // Generic result/error channel. Copy the text out of the inbox buffer:
   // ui_result can build a dialog (allocations) and the inbox pointer must

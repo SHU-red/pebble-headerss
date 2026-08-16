@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.25
+
+- **The article finally scrolls on screen — the reader's core bug**: the
+  heading + summary page never moved visually. The page's header and body
+  layers were attached with `layer_add_child()` onto the scroll layer's own
+  layer, but a ScrollLayer only moves its internal "content" sub-layer
+  (children must be added via `scroll_layer_add_child()`). The scroll offset
+  state advanced exactly as logged (page-down -150 → -2668 → bottom → next
+  article) while the drawn frames never changed, so the screen showed the
+  same top of the article for every press. Verified: after one page-down the
+  framebuffer diff went from ~10 pixels (nothing moved) to ~9,500 (the text
+  scrolled); the bottom-advance still settles on the next article.
+
 ## 0.3.24
 
 - **Long headings fully readable**: the heading's last line was never drawn
