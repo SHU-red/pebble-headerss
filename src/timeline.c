@@ -11,7 +11,7 @@
 // stream in from the phone into a ring buffer. The reader is a paged
 // full-screen view: a 2 px accent progress line along the very top, a theme
 // top bar (stream name) below it, one article per page — an editorial
-// header (GOTHIC_24_BOLD accent heading on the page background, muted feed·time
+// header (GOTHIC_24_BOLD white heading on the page background, accent feed·time
 // meta, a 2 px accent rule), a scrollable summary body — and a slim accent
 // SIDEBAR on the right holding the clock chip, the read/unread dot, the
 // star and the highlight-word M badge. Page changes slide with a
@@ -1328,14 +1328,12 @@ static int header_page_idx(Layer *header) {
 }
 
 //! Editorial header (P13/P4): page background — no accent band. The heading
-//! reads in the ACCENT color at GOTHIC_24_BOLD (0.3.35: smaller than the
-//! first overhaul's 28, and accent-colored instead of theme_fg) with
-//! highlighted words on a theme_fg chip in the page color (a white chip
-//! with black text in dark mode, black chip with white text in light — the
-//! inverted-accent treatment), the feed·time meta sits at the bottom in
-//! muted GOTHIC_14, and a 2 px accent rule closes the header like a
-//! newspaper dateline. The read state lives in the sidebar icons, not the
-//! colors.
+//! reads in theme_fg at GOTHIC_24_BOLD with highlighted words on an
+//! accent fill in black text (the app's accent-surface treatment — the
+//! heading went back to white after the accent experiment of 0.3.35), the
+//! feed·time meta sits at the bottom in the ACCENT color, and a 2 px
+//! accent rule closes the header like a newspaper dateline. The read
+//! state lives in the sidebar icons, not the colors.
 static void header_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
 
@@ -1360,19 +1358,19 @@ static void header_update(Layer *layer, GContext *ctx) {
   char t[16];
   format_reltime(t, sizeof(t), a->published);
   snprintf(meta, sizeof(meta), "%s · %s", a->feed, t);
-  graphics_context_set_text_color(ctx, theme_muted());
+  graphics_context_set_text_color(ctx, s_accent);
   graphics_draw_text(ctx, meta, fonts_get_system_font(FONT_KEY_GOTHIC_14),
                      GRect(4, b.size.h - HEADER_META_H, text_w, 16),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   // The 2 px accent rule under the meta (editorial dateline).
   graphics_context_set_fill_color(ctx, s_accent);
   graphics_fill_rect(ctx, GRect(4, b.size.h - 3, text_w, 2), 0, GCornerNone);
-  // The heading: accent text, highlighted words on a theme_fg chip in the
-  // page color (inverted-accent, so the highlight pops on the accent
-  // heading). The LAST line's bottom is 2 + head_layout.height =
-  // b.size.h - HEADER_META_H + 2; the y_limit guards the meta line below.
+  // The heading: theme_fg (white in dark) bold text, highlighted words on
+  // an accent fill with black text. The LAST line's bottom is
+  // 2 + head_layout.height = b.size.h - HEADER_META_H + 2; the y_limit
+  // guards the meta line below.
   hl_draw(ctx, a->title, &p->head_layout, 4, 2, heading_font, heading_font,
-          s_accent, theme_fg(), theme_bg(),
+          theme_fg(), s_accent, GColorBlack,
           (int16_t)(b.size.h - HEADER_META_H + 2));
 }
 

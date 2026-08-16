@@ -16,6 +16,16 @@ articles full-screen, mark read, star favourites, highlight words.
   mark-all-read
 - Highlight words survive reinstalls
 
+## 0.3.37
+
+- **Heading color back to white** (theme color: white in dark mode, black
+  in light) — the accent-heading experiment of 0.3.35 is reverted; the
+  heading stays GOTHIC_24_BOLD.
+- **Feed·time line in the accent color** — the source + time below the
+  heading is now your accent color instead of the muted gray.
+- Highlight words in the heading are back to the accent-fill + black-text
+  treatment (the inverted chips were a stopgap for the accent heading).
+
 ## 0.3.36
 
 - **Match badge rework**: the magnifier is gone — the badge is always an

@@ -8,7 +8,7 @@
 // startup so a device log can prove which build is running (line numbers
 // shift between commits and were ambiguous). Update on every release.
 // ---------------------------------------------------------------------------
-#define BUILD_COMMIT "53b5feb"
+#define BUILD_COMMIT "e1f63eb"
 
 // ---------------------------------------------------------------------------
 // Shared limits and wire types. These are the single source of truth for the
