@@ -94,6 +94,10 @@ static Layer *s_sidebar;   // accent bar with the eye/star/M icons
 static Layer *s_end_bar;   // grey "LONG" hint at the bottom of a long article
 static AppTimer *s_clock_timer; // 1-minute tick: redraws the sidebar clock
 
+static Layer *s_toast;        // scroll-mode entry chip (brief centered flash)
+static bool s_toast_visible;  // chip drawn only while true
+static AppTimer *s_toast_timer; // 1.2 s auto-hide
+
 static TextLayer *s_status;   // full-screen "Loading..." / "All caught up"
 static Layer *s_status_check; // accent GPath check above the status text
 static TextLayer *s_status_hint; // small hint under the status text
@@ -1080,16 +1084,18 @@ static void page_set_offset(Page *p, int32_t y) {
 
 #define END_BAR_H 16
 
-//! "- HOLD DOWN -" hint at the bottom of the view, two meanings:
-//! - initial view of a LONG article (not in scroll mode): HOLD DOWN enters
-//!   scroll mode (tap still skips) — the prompt to read this one instead of
-//!   breezing past it;
-//! - scrolled to the very end (scroll mode): HOLD DOWN advances, the tap
-//!   there is held back (the advance needs the explicit HOLD).
-//! Text-only in the muted theme color — no bar fill, so nothing is painted
-//! over the article; the content itself scrolls one extra line so the last
-//! article line clears the hint (page_scroll_min). Empty at every other
-//! position.
+//! Hint at the bottom of the view, three states:
+//! - initial view of a LONG article (not in scroll mode): "- HOLD DOWN -"
+//!   in the muted theme color — the prompt to enter scroll mode (tap still
+//!   skips);
+//! - scroll mode, mid-scroll: "TAP scroll · HOLD next" in the accent color
+//!   — the persistent mode indicator: the hold flipped the tap behavior,
+//!   and this line keeps saying so until the end;
+//! - scrolled to the very end (scroll mode): "- HOLD DOWN -" muted again —
+//!   HOLD DOWN advances, the tap there is held back (explicit HOLD only).
+//! Text-only, no bar fill, so nothing is painted over the article; the
+//! content itself scrolls one extra line so the last article line clears
+//! the hint (page_scroll_min).
 static void end_bar_update(Layer *layer, GContext *ctx) {
   if (s_count == 0 || !cur_page() || !cur_page()->content) {
     return;
@@ -1100,20 +1106,92 @@ static void end_bar_update(Layer *layer, GContext *ctx) {
   if (!long_article) {
     return;
   }
+  GRect b = layer_get_bounds(layer);
   if (s_scroll_mode) {
     bool at_bottom = (off <= page_scroll_min(p) + 2);
-    if (!at_bottom) {
-      return; // end hint only at the very bottom
+    if (at_bottom) {
+      graphics_context_set_text_color(ctx, theme_muted());
+      graphics_draw_text(ctx, "- HOLD DOWN -",
+                         fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                         b, GTextOverflowModeTrailingEllipsis,
+                         GTextAlignmentCenter, NULL);
+    } else {
+      // Scroll mode, not at the end: the mode indicator (accent, so it
+      // reads differently from the muted invitations).
+      graphics_context_set_text_color(ctx, s_accent);
+      graphics_draw_text(ctx, "TAP scroll · HOLD next",
+                         fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                         b, GTextOverflowModeTrailingEllipsis,
+                         GTextAlignmentCenter, NULL);
     }
+    return;
   }
   // Initial mode: the prompt shows the whole time (the article sits at the
-  // top there); scroll mode: only at the bottom.
-  GRect b = layer_get_bounds(layer);
+  // top there).
   graphics_context_set_text_color(ctx, theme_muted());
   graphics_draw_text(ctx, "- HOLD DOWN -",
                      fonts_get_system_font(FONT_KEY_GOTHIC_14),
                      b, GTextOverflowModeTrailingEllipsis,
                      GTextAlignmentCenter, NULL);
+}
+
+//! Brief centered chip ("TAP to scroll") confirming the hold entered scroll
+//! mode. A page-colored rounded pill with the accent text, auto-hidden
+//! after 1.2 s; the persistent bottom hint takes over from there.
+static void toast_update(Layer *layer, GContext *ctx) {
+  if (!s_toast_visible) {
+    return;
+  }
+  GRect b = layer_get_bounds(layer);
+  int16_t w = b.size.w - SIDEBAR_W - 20; // ends exactly at the sidebar edge
+  if (w > b.size.w - 8) {
+    w = b.size.w - 8;
+  }
+  GRect pill = GRect(b.size.w / 2 - w / 2, b.size.h / 2 - 17, w, 34);
+  graphics_context_set_fill_color(ctx, theme_bg());
+  graphics_fill_rect(ctx, pill, 6, GCornersAll);
+  graphics_context_set_stroke_color(ctx, theme_muted());
+  graphics_draw_round_rect(ctx, pill, 6);
+  graphics_context_set_text_color(ctx, s_accent);
+  graphics_draw_text(ctx, "TAP to scroll",
+                     fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                     GRect(pill.origin.x, pill.origin.y + 7, pill.size.w, 20),
+                     GTextOverflowModeTrailingEllipsis,
+                     GTextAlignmentCenter, NULL);
+}
+
+static void toast_timer_cb(void *data) {
+  s_toast_timer = NULL;
+  s_toast_visible = false;
+  if (s_toast) {
+    layer_mark_dirty(s_toast);
+  }
+}
+
+static void toast_show(void) {
+  s_toast_visible = true;
+  if (s_toast) {
+    layer_mark_dirty(s_toast);
+  }
+  if (s_toast_timer) {
+    app_timer_cancel(s_toast_timer);
+  }
+  s_toast_timer = app_timer_register(1200, toast_timer_cb, NULL);
+}
+
+//! Drop the chip immediately (article change / teardown) so it never leaks
+//! across a transition.
+static void toast_hide(void) {
+  if (s_toast_timer) {
+    app_timer_cancel(s_toast_timer);
+    s_toast_timer = NULL;
+  }
+  if (s_toast_visible) {
+    s_toast_visible = false;
+    if (s_toast) {
+      layer_mark_dirty(s_toast);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1596,6 +1674,7 @@ static void transition_to(int8_t dir) {
   s_advance_guard = (dir > 0);
   s_dir = dir;
   s_target_idx = nidx;
+  toast_hide(); // the chip must not leak across an article change
   mark_timer_cancel(); // leaving the current article: drop its auto-mark
   transition_watchdog_cancel();
   s_transition_watchdog = app_timer_register(2000, transition_watchdog_cb, NULL);
@@ -1803,6 +1882,7 @@ static void timeline_down_hold_click(ClickRecognizerRef rec, void *ctx) {
     APP_LOG(APP_LOG_LEVEL_INFO, "nav: hold DOWN -> scroll mode");
     s_scroll_mode = true;
     vibes_short_pulse();
+    toast_show(); // "TAP to scroll" chip: the tap behavior just flipped
     if (s_end_bar) {
       layer_mark_dirty(s_end_bar); // the prompt hides until the end
     }
@@ -1961,14 +2041,29 @@ static void timeline_window_load(Window *window) {
 
   // Grey "LONG" hint at the very bottom of the view: visible while the
   // reader sits at the end of a long article (tap is held back there).
-  s_end_bar = layer_create(GRect(0, s_view_h - END_BAR_H, s_win_w, END_BAR_H));
+  // A ROOT child added AFTER the page area: the pages are built later and
+  // would otherwise paint over it (the page roots stack on top of anything
+  // added to the page area first).
+  s_end_bar = layer_create(GRect(0, TOP_BAR_H + PROGRESS_H + DIVIDER_H +
+                                     s_view_h - END_BAR_H,
+                                 s_win_w, END_BAR_H));
   layer_set_update_proc(s_end_bar, end_bar_update);
-  layer_add_child(s_page_area, s_end_bar);
+  layer_add_child(root, s_end_bar);
 
   s_sidebar = layer_create(GRect(s_win_w - SIDEBAR_W, 0, SIDEBAR_W, s_win_h));
   layer_set_update_proc(s_sidebar, sidebar_update);
   layer_add_child(root, s_sidebar);
   s_clock_timer = app_timer_register(60000, clock_tick_cb, NULL);
+
+  // Scroll-mode entry chip: a brief centered "TAP to scroll" flash over the
+  // page. Added last so it draws above the pages, the end bar and the
+  // sidebar; hidden unless a toast is active.
+  s_toast = layer_create(GRect(0, TOP_BAR_H + PROGRESS_H + DIVIDER_H,
+                               s_win_w, s_view_h));
+  layer_set_update_proc(s_toast, toast_update);
+  layer_add_child(root, s_toast);
+  s_toast_visible = false;
+  s_toast_timer = NULL;
 
   window_set_click_config_provider(window, timeline_click_config_provider);
 
@@ -1980,6 +2075,7 @@ static void timeline_window_load(Window *window) {
 //! and release the layer pointers.
 static void timeline_close(void) {
   mark_timer_cancel(); // the pending auto-mark must not fire on dead pages
+  toast_hide(); // cancel the chip timer; the layer dies with the window
   if (s_clock_timer) {
     app_timer_cancel(s_clock_timer);
     s_clock_timer = NULL;
@@ -2062,6 +2158,10 @@ static void timeline_window_unload(Window *window) {
   if (s_sidebar) {
     layer_destroy(s_sidebar);
     s_sidebar = NULL;
+  }
+  if (s_toast) {
+    layer_destroy(s_toast);
+    s_toast = NULL;
   }
   if (s_page_area) {
     layer_destroy(s_page_area); // destroys the end bar too

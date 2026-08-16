@@ -5,7 +5,10 @@
 **HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
 articles full-screen, mark read, star favourites, highlight words.
 
-**v0.3.38**
+**v0.3.39**
+- Scroll-mode entry flash: a centered "TAP to scroll" chip confirms the
+  hold; the bottom line then reads "TAP scroll · HOLD next" (accent) the
+  whole way, "- HOLD DOWN -" at the end
 - Fast skimming: DOWN always jumps to the next article; long articles
   invite a hold with a centered "- HOLD DOWN -" hint
 - Hold DOWN enters scroll mode: taps scroll page by page, a hold jumps
@@ -22,6 +25,21 @@ articles full-screen, mark read, star favourites, highlight words.
 - Star favourites, unread-only mode, auto-mark-read, per-feed
   mark-all-read
 - Highlight words survive reinstalls
+
+## 0.3.39
+
+- **Scroll-mode indicator.** The long-press that enters scroll mode now
+  shows a centered "TAP to scroll" chip (accent text on a page-colored
+  pill) for 1.2 s — the hold flips the tap behavior, and the chip says so.
+- **Persistent mode hint.** While in scroll mode the bottom line reads
+  "TAP scroll · HOLD next" in the accent color for the whole scroll;
+  at the very end it switches back to the muted "- HOLD DOWN -" (tap is
+  held back there, the advance is hold-only). The skim view keeps its
+  muted "- HOLD DOWN -" invitation.
+- **Fix: the bottom hint was never visible.** The end bar sat inside the
+  page area below the pages, which are built later and paint over it —
+  the "- HOLD DOWN -" and the new mode line were hidden under the
+  article. The bar now lives in the window root, drawn above the page.
 
 ## 0.3.38
 
