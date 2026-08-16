@@ -10,8 +10,17 @@
 // them, and every change is written to flash immediately.
 // ---------------------------------------------------------------------------
 
+//! Theme mode (watch sub-menu toggle, single tap cycles). "System" follows
+//! the app's default look (dark, Timeline-style); the PebbleOS exposes no
+//! system-theme API, so the app default is the nearest equivalent.
+typedef enum {
+  THEME_SYSTEM = 0,
+  THEME_DARK = 1,
+  THEME_LIGHT = 2,
+} ThemeMode;
+
 extern GColor s_accent;      // GColor8, default GColorCobaltBlue
-extern bool s_dark;
+extern int8_t s_theme;       // ThemeMode
 extern bool s_touch;
 extern bool s_unread_only;   // "Unread only" — hide read articles from the server
 extern bool s_important;     // "Important row" — root menu special row (default ON)
@@ -22,7 +31,11 @@ void storage_save_settings(void);
 void storage_save_tree(const FeedNode *nodes, int count);
 int storage_load_tree(FeedNode *nodes, int max);
 
-//! Theme palette by s_dark (mirror launcher).
+//! Effective dark-mode flag: THEME_SYSTEM and THEME_DARK are dark, only
+//! THEME_LIGHT is light.
+bool theme_dark(void);
+
+//! Theme palette by theme_dark() (mirror launcher).
 GColor theme_bg(void);
 GColor theme_fg(void);
 GColor theme_muted(void);

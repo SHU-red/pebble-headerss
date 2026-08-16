@@ -240,7 +240,7 @@ void proto_reply_config(void) {
   DictionaryIterator *iter;
   if (app_message_outbox_begin(&iter) == APP_MSG_OK) {
     dict_write_int32(iter, MESSAGE_KEY_AccentColor, (int32_t)s_accent.argb);
-    dict_write_int32(iter, MESSAGE_KEY_DarkMode, s_dark ? 1 : 0);
+    dict_write_int32(iter, MESSAGE_KEY_DarkMode, theme_dark() ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_TouchEnabled, s_touch ? 1 : 0);
     dict_write_end(iter);
     app_message_outbox_send();
@@ -346,7 +346,7 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     settings = true;
   }
   if ((t = dict_find(iter, MESSAGE_KEY_DarkMode))) {
-    s_dark = t->value->int32 != 0;
+    s_theme = (t->value->int32 != 0) ? THEME_DARK : THEME_LIGHT;
     settings = true;
   }
   if ((t = dict_find(iter, MESSAGE_KEY_TouchEnabled))) {

@@ -882,9 +882,12 @@ static void push_folder_window(const char *id, const char *name) {
 
 // ---------------------------------------------------------------------------
 //! Sub-menu (UP from the root): Refresh / Mark all read / Auto mark read
-//! (opens the MarkMode selection window) / Unread only / the two
+//! (opens the MarkMode selection window) / Unread only / Theme / the two
 //! smart-surface toggles — flat, one submenu (the auto-mark window)
 // ---------------------------------------------------------------------------
+
+//! Theme row label for the current mode (subtitle under "Theme").
+static const char *const theme_mode_labels[3] = { "System", "Dark", "Light" };
 
 //! Mode labels for the "Auto mark read" row subtitle and the selection
 //! window, indexed by MarkMode (see MARK_MODE_LABELS in common.h).
@@ -892,7 +895,7 @@ static const char *const s_mark_mode_labels[MARK_MODE_COUNT] = MARK_MODE_LABELS;
 
 static uint16_t sub_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
                                  void *callback_context) {
-  return 6;
+  return 7;
 }
 
 static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
@@ -913,6 +916,11 @@ static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell
     menu_cell_basic_draw(ctx, cell_layer, "Unread only",
                          s_unread_only ? "ON" : "OFF", NULL);
   } else if (cell_index->row == 4) {
+    const char *mode = (s_theme >= THEME_SYSTEM && s_theme <= THEME_LIGHT)
+                           ? theme_mode_labels[s_theme]
+                           : "?";
+    menu_cell_basic_draw(ctx, cell_layer, "Theme", mode, NULL);
+  } else if (cell_index->row == 5) {
     menu_cell_basic_draw(ctx, cell_layer, "Important row",
                          s_important ? "ON" : "OFF", NULL);
   } else {
@@ -938,6 +946,14 @@ static void sub_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
     vibes_short_pulse();
     menu_layer_reload_data(menu_layer);
   } else if (cell_index->row == 4) {
+    // Theme: a single tap cycles System -> Dark -> Light -> System and
+    // re-themes every live window instantly.
+    s_theme = (int8_t)((s_theme + 1) % 3);
+    storage_save_settings();
+    apply_settings();
+    vibes_short_pulse();
+    menu_layer_reload_data(menu_layer);
+  } else if (cell_index->row == 5) {
     s_important = !s_important;
     storage_save_settings();
     vibes_short_pulse();

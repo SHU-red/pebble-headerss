@@ -14,6 +14,15 @@ articles full-screen, mark read, star favourites, highlight words.
   indicator; unread-only mode; auto-mark-read; per-feed mark-all-read and
   refresh
 
+## 0.3.33
+
+- **Theme on the watch**: the sub-menu has a **Theme** row — one tap cycles
+  System → Dark → Light and re-themes every screen instantly, no longer
+  depending on the phone app for dark/light mode.
+- **Settings survive reinstalls**: on launch the watch now restores the
+  phone-side settings (accent color, touch, highlight words) from the
+  phone, so a fresh install no longer resets your matchword string.
+
 ## 0.3.32
 
 - **Progress bar: big position dot** — the current article position is now

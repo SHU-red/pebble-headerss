@@ -23,7 +23,8 @@
 // ---------------------------------------------------------------------------
 
 #define PERSIST_KEY_ACCENT 1     // int32: 24-bit hex of the accent color
-#define PERSIST_KEY_DARK 2       // int32: 1 = dark theme
+#define PERSIST_KEY_DARK 2       // int32 (retired 0.3.33): old dark-theme bool
+#define PERSIST_KEY_THEME 15     // int32: ThemeMode (System/Dark/Light)
 #define PERSIST_KEY_TOUCH 3      // int32: 1 = native touch navigation
 // Retired in 0.3.0 (replaced by PERSIST_KEY_MARK_MODE): kept only so
 // storage_load can sweep the stale flash entries on first run.
@@ -42,7 +43,7 @@
 #define DEFAULT_ACCENT_HEX 0x0055AA // GColorCobaltBlue (24-bit RGB)
 
 GColor s_accent;
-bool s_dark;
+int8_t s_theme = THEME_SYSTEM;
 bool s_touch;
 bool s_unread_only;
 bool s_important;
@@ -183,8 +184,18 @@ void storage_load(void) {
     accent_hex = DEFAULT_ACCENT_HEX;
   }
   s_accent = GColorFromHEX(accent_hex);
-  // Dark theme is the app's look (Timeline-style); missing key = dark.
-  s_dark = persist_exists(PERSIST_KEY_DARK) ? persist_read_int(PERSIST_KEY_DARK) != 0 : true;
+  // Theme mode: System (app default, dark Timeline-style) / Dark / Light.
+  // Migrate from the retired DarkMode bool (key 2): 1 = dark, 0 = light,
+  // absent = System. The old key is swept below.
+  int tm = (int)persist_read_int(PERSIST_KEY_THEME);
+  if (tm < THEME_SYSTEM || tm > THEME_LIGHT) {
+    if (persist_exists(PERSIST_KEY_DARK)) {
+      tm = persist_read_int(PERSIST_KEY_DARK) != 0 ? THEME_DARK : THEME_LIGHT;
+    } else {
+      tm = THEME_SYSTEM;
+    }
+  }
+  s_theme = (int8_t)tm;
   s_touch = persist_read_int(PERSIST_KEY_TOUCH) != 0;
   // Auto-mark mode: default MARK_NOW for fresh installs (the old
   // both-toggles-ON default); clamp any persisted garbage to the enum range.
@@ -200,6 +211,9 @@ void storage_load(void) {
   }
   if (persist_exists(PERSIST_KEY_MARK_DETAIL)) {
     persist_delete(PERSIST_KEY_MARK_DETAIL);
+  }
+  if (persist_exists(PERSIST_KEY_DARK)) {
+    persist_delete(PERSIST_KEY_DARK); // retired: the ThemeMode key 15 replaces it
   }
   // "Unread only" defaults ON: read articles stay out of the server fetches.
   s_unread_only = persist_exists(PERSIST_KEY_UNREAD_ONLY)
@@ -228,7 +242,7 @@ void storage_load(void) {
 //! Persist every settings toggle. Called after any Clay-delivered change.
 void storage_save_settings(void) {
   persist_write_int(PERSIST_KEY_ACCENT, (int32_t)accent_to_hex(s_accent));
-  persist_write_int(PERSIST_KEY_DARK, s_dark ? 1 : 0);
+  persist_write_int(PERSIST_KEY_THEME, s_theme);
   persist_write_int(PERSIST_KEY_TOUCH, s_touch ? 1 : 0);
   persist_write_int(PERSIST_KEY_MARK_MODE, s_mark_mode);
   persist_write_int(PERSIST_KEY_UNREAD_ONLY, s_unread_only ? 1 : 0);
@@ -240,9 +254,13 @@ void storage_save_settings(void) {
 // Theme palette (mirror launcher)
 // ---------------------------------------------------------------------------
 
-GColor theme_bg(void) { return s_dark ? GColorBlack : GColorWhite; }
-GColor theme_fg(void) { return s_dark ? GColorWhite : GColorBlack; }
-GColor theme_muted(void) { return s_dark ? GColorLightGray : GColorDarkGray; }
+//! Effective dark mode: System and Dark are dark (the app's Timeline look),
+//! only Light is light.
+bool theme_dark(void) { return s_theme != THEME_LIGHT; }
+
+GColor theme_bg(void) { return theme_dark() ? GColorBlack : GColorWhite; }
+GColor theme_fg(void) { return theme_dark() ? GColorWhite : GColorBlack; }
+GColor theme_muted(void) { return theme_dark() ? GColorLightGray : GColorDarkGray; }
 
 // ---------------------------------------------------------------------------
 // Tree cache: instant start with the last known feed tree; refreshed in the

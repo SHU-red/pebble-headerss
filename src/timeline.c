@@ -366,7 +366,7 @@ static void top_bar_update(Layer *layer, GContext *ctx) {
 //! in light mode — a white line would vanish against the white page.
 static void divider_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
-  graphics_context_set_fill_color(ctx, s_dark ? GColorWhite : GColorDarkGray);
+  graphics_context_set_fill_color(ctx, theme_dark() ? GColorWhite : GColorDarkGray);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 }
 

@@ -766,9 +766,53 @@ function handleConfigReply(payload) {
   console.log('appmessage: config from watch saved');
 }
 
+//! Restore the phone-side watch-bound settings to the watch on launch.
+//! After an app reinstall the watch's flash is fresh, so the durable Clay
+//! values (accent color, touch, highlight words) are pushed back to the
+//! watch — otherwise the user's matchword string would reset with every
+//! reinstall. The theme is watch-side now (sub-menu toggle) and is
+//! deliberately NOT overridden here.
+function restoreWatchSettings() {
+  try {
+    var raw = localStorage.getItem(CLAY_SETTINGS_KEY);
+    if (!raw) {
+      return;
+    }
+    var s = JSON.parse(raw);
+    function plain(k) {
+      var v = s[k];
+      return (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+    }
+    var msg = {};
+    var accent = plain('AccentColor');
+    if (typeof accent === 'number' && !isNaN(accent)) {
+      msg.AccentColor = accent;
+    }
+    var touch = plain('TouchEnabled');
+    if (touch !== undefined && touch !== null) {
+      msg.TouchEnabled = touch ? 1 : 0;
+    }
+    var words = plain('HighlightWords');
+    if (words !== undefined && words !== null) {
+      msg.HighlightWords = String(words);
+    }
+    if (msg.AccentColor !== undefined || msg.TouchEnabled !== undefined ||
+        msg.HighlightWords !== undefined) {
+      Pebble.sendAppMessage(msg, function () {
+        console.log('ready: watch settings restored from clay');
+      }, function (err) {
+        console.log('ready: settings restore failed: ' + JSON.stringify(err));
+      });
+    }
+  } catch (err) {
+    console.log('ready: settings restore failed: ' + err);
+  }
+}
+
 Pebble.addEventListener('ready', function () {
   console.log('JS ready');
   importClaySettings();
+  restoreWatchSettings(); // fresh watch flash: push the phone's durable values
   // Pull the durable watch-bound settings from the watch (it persists what
   // Clay sent) and rewrite the 'clay-settings' prefill from the reply.
   var msg = {};
