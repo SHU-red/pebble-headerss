@@ -85,6 +85,8 @@ static TextLayer *s_top_text;
 static Layer *s_sidebar;   // accent bar with the eye/star/M icons
 static Layer *s_end_bar;   // grey "LONG" hint at the bottom of a long article
 static AppTimer *s_clock_timer; // 1-minute tick: redraws the sidebar clock
+static bool s_progress_pulse;  // the progress thumb flashes on each settle
+static AppTimer *s_progress_pulse_timer;
 static TextLayer *s_status;   // full-screen "Loading..." / "All caught up"
 static Layer *s_status_check; // accent GPath check above the status text
 static TextLayer *s_status_hint; // small hint under the status text
@@ -280,19 +282,21 @@ static void format_reltime(char *buf, size_t len, int32_t published) {
 // Static chrome: progress line + top bar + sidebar
 // ---------------------------------------------------------------------------
 
-//! 2 px accent progress line along the very top of the screen (y = 0..2),
-//! above the black top bar. Tracks the current article position within the
-//! loaded stream; gated by the progress setting. The denominator is the
-//! larger of the announced page size (s_page_announced, set by
-//! timeline_page_begin) and the actual loaded count, so with s_count == 1 on
-//! entry the bar starts near 0 (1/50 of the page) instead of jumping to 100%.
+//! 2 px progress line along the very top of the screen (y = 0..2), above
+//! the black top bar: a full-width muted TRACK with a 2 px-tall x 3 px-wide
+//! accent THUMB at the current article position (scrollbar style). The
+//! thumb flashes bright (theme_fg) for ~160 ms on every article change
+//! (progress_pulse_start). Gated by the progress setting. The denominator
+//! is the larger of the announced page size (s_page_announced, set by
+//! timeline_page_begin) and the actual loaded count, so with s_count == 1
+//! on entry the thumb starts near 0 (1/50 of the page) instead of 100%.
 static void progress_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   if (setting_progress() && s_count > 0) {
     int32_t denom = s_count > s_page_announced ? s_count : s_page_announced;
     if (denom > 0) {
-      // Cap the bar at the sidebar's left edge: at the last article (100%)
-      // it reaches exactly the accent icon area, never hidden under it.
+      // Cap at the sidebar's left edge: the last article reaches exactly
+      // the accent icon area, never hidden under it.
       int16_t max_w = (int16_t)(b.size.w - SIDEBAR_W);
       int16_t w = (int16_t)((int32_t)(s_idx + 1) * max_w / denom);
       if (w < 0) {
@@ -301,11 +305,43 @@ static void progress_update(Layer *layer, GContext *ctx) {
       if (w > max_w) {
         w = max_w;
       }
-      if (w > 0) {
-        graphics_context_set_fill_color(ctx, s_accent);
-        graphics_fill_rect(ctx, GRect(0, 0, w, b.size.h), 0, GCornerNone);
+      // The full-width track (read + unread remainder) in the muted color.
+      graphics_context_set_fill_color(ctx, theme_muted());
+      graphics_fill_rect(ctx, GRect(0, 0, max_w, b.size.h), 0, GCornerNone);
+      // The thumb: its right edge marks the current position; kept inside
+      // the cap at the last article.
+      const int16_t TW = 3;
+      int16_t tx = w - TW;
+      if (tx < 0) {
+        tx = 0;
       }
+      if (tx > max_w - TW) {
+        tx = max_w - TW;
+      }
+      graphics_context_set_fill_color(ctx,
+                                      s_progress_pulse ? theme_fg() : s_accent);
+      graphics_fill_rect(ctx, GRect(tx, 0, TW, b.size.h), 0, GCornerNone);
     }
+  }
+}
+
+//! The thumb's settle flash: bright for ~160 ms, then back to the accent.
+static void progress_pulse_cb(void *data) {
+  s_progress_pulse_timer = NULL;
+  s_progress_pulse = false;
+  if (s_prog_line) {
+    layer_mark_dirty(s_prog_line);
+  }
+}
+
+static void progress_pulse_start(void) {
+  if (s_progress_pulse_timer) {
+    app_timer_cancel(s_progress_pulse_timer);
+  }
+  s_progress_pulse = true;
+  s_progress_pulse_timer = app_timer_register(160, progress_pulse_cb, NULL);
+  if (s_prog_line) {
+    layer_mark_dirty(s_prog_line);
   }
 }
 
@@ -1467,6 +1503,7 @@ static void transition_finalize(void) {
   }
   if (s_prog_line) {
     layer_mark_dirty(s_prog_line); // progress line follows the new index
+    progress_pulse_start(); // the thumb flashes on each settle
   }
   if (s_end_bar) {
     layer_mark_dirty(s_end_bar); // the LONG hint follows the new article
@@ -1888,6 +1925,11 @@ static void timeline_close(void) {
     app_timer_cancel(s_clock_timer);
     s_clock_timer = NULL;
   }
+  if (s_progress_pulse_timer) {
+    app_timer_cancel(s_progress_pulse_timer);
+    s_progress_pulse_timer = NULL;
+    s_progress_pulse = false;
+  }
   full_summary_reset(); // free the assembled full text
   transition_watchdog_cancel();
   proto_flush_now();
@@ -2144,6 +2186,7 @@ void timeline_collect_article(DictionaryIterator *iter) {
     }
     if (s_prog_line) {
       layer_mark_dirty(s_prog_line); // progress line appears with the article
+      progress_pulse_start(); // the thumb flashes on the first article too
     }
     mark_timer_start(0);
     full_summary_request(0);

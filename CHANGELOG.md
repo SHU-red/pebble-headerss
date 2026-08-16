@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.31
+
+- **Progress bar: scrollbar thumb with a settle flash** — the 2 px line is
+  now a full-width muted track with a 2 px-tall × 3 px-wide accent thumb at
+  the current article position; the thumb flashes bright for ~160 ms on
+  every article change (including the first article of a stream).
+
 ## 0.3.30
 
 - **Connection info removed**: the sub-menu entry and its whole chain are
