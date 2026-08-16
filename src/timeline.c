@@ -83,6 +83,7 @@ static Layer *s_top_bar;   // black bar, accent text (static)
 static Layer *s_divider;   // thin accent line under the top bar
 static TextLayer *s_top_text;
 static Layer *s_sidebar;   // accent bar with the eye/star/M icons
+static Layer *s_end_bar;   // grey "LONG" hint at the bottom of a long article
 static AppTimer *s_clock_timer; // 1-minute tick: redraws the sidebar clock
 static TextLayer *s_status;   // full-screen "Loading..." / "All caught up"
 static Layer *s_status_check; // accent GPath check above the status text
@@ -981,6 +982,9 @@ static void page_resize(Page *p) {
   layer_set_frame(p->content, GRect(0, off, s_win_w, (int16_t)total));
   layer_mark_dirty(p->header);
   layer_mark_dirty(p->body);
+  if (s_end_bar) {
+    layer_mark_dirty(s_end_bar); // the LONG hint follows the content size
+  }
 }
 
 //! Manual scroll: move the page's content wrapper by frame — the only
@@ -997,6 +1001,37 @@ static void page_set_offset(Page *p, int32_t y) {
   }
   layer_set_frame(p->content, GRect(0, y, s_win_w, p->content_h));
   layer_mark_dirty(p->content);
+  if (s_end_bar) {
+    layer_mark_dirty(s_end_bar); // the LONG hint follows the bottom state
+  }
+}
+
+#define END_BAR_H 16
+
+//! Grey "LONG" hint pinned to the bottom of the view while the reader sits
+//! at the very end of a long article: a tap there is held back (the
+//! advance needs an explicit HOLD), so the hint tells the user why.
+//! Transparent (no fill) at every other position/article.
+static void end_bar_update(Layer *layer, GContext *ctx) {
+  if (s_count == 0 || !cur_page() || !cur_page()->content) {
+    return;
+  }
+  const Page *p = cur_page();
+  int32_t off = layer_get_frame(p->content).origin.y;
+  bool long_article = (p->content_h > s_view_h + 8); // a real scroll area
+  bool at_bottom = (off <= s_view_h - p->content_h + 2);
+  if (!long_article || !at_bottom) {
+    return;
+  }
+  GRect b = layer_get_bounds(layer);
+  graphics_context_set_fill_color(ctx, theme_muted());
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, theme_bg());
+  graphics_draw_text(ctx, "LONG",
+                     fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                     GRect(0, 0, b.size.w, b.size.h),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
+                     NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -1432,6 +1467,9 @@ static void transition_finalize(void) {
   if (s_prog_line) {
     layer_mark_dirty(s_prog_line); // progress line follows the new index
   }
+  if (s_end_bar) {
+    layer_mark_dirty(s_end_bar); // the LONG hint follows the new article
+  }
   timeline_prefetch_check();
 }
 
@@ -1579,6 +1617,19 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
           "nav: DOWN off=%ld frame=%d cont=%ld bottom=%d",
           (long)off, s_view_h, (long)content_h, (int)at_bottom);
   if (at_bottom) {
+    if (content_h > s_view_h + 8) {
+      // End of a LONG article: one fast tap must not throw the reader past
+      // it — the scroll state is lost and getting back means re-scrolling
+      // from the heading. Advance only on an explicit HOLD (the grey LONG
+      // bar at the bottom says so); the pulse confirms the press.
+      APP_LOG(APP_LOG_LEVEL_INFO,
+              "nav: long-article end — hold DOWN to advance");
+      vibes_short_pulse();
+      if (s_end_bar) {
+        layer_mark_dirty(s_end_bar);
+      }
+      return;
+    }
     maybe_advance();
     return;
   }
@@ -1810,6 +1861,12 @@ static void timeline_window_load(Window *window) {
                                    s_win_w, s_view_h));
   layer_add_child(root, s_page_area);
 
+  // Grey "LONG" hint at the very bottom of the view: visible while the
+  // reader sits at the end of a long article (tap is held back there).
+  s_end_bar = layer_create(GRect(0, s_view_h - END_BAR_H, s_win_w, END_BAR_H));
+  layer_set_update_proc(s_end_bar, end_bar_update);
+  layer_add_child(s_page_area, s_end_bar);
+
   s_sidebar = layer_create(GRect(s_win_w - SIDEBAR_W, 0, SIDEBAR_W, s_win_h));
   layer_set_update_proc(s_sidebar, sidebar_update);
   layer_add_child(root, s_sidebar);
@@ -1909,8 +1966,9 @@ static void timeline_window_unload(Window *window) {
     s_sidebar = NULL;
   }
   if (s_page_area) {
-    layer_destroy(s_page_area);
+    layer_destroy(s_page_area); // destroys the end bar too
     s_page_area = NULL;
+    s_end_bar = NULL;
   }
   window_destroy(s_tl_window);
   s_tl_window = NULL;

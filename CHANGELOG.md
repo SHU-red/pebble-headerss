@@ -2,6 +2,12 @@
 
 ## 0.3.26
 
+- **Long articles must be left with a HOLD** (new): one fast tap at the end
+  of a long article no longer throws you past it — an accidental tap used to
+  advance and the scroll state was gone (getting back meant re-scrolling
+  from the heading). At the article's true bottom a tap is held back (with
+  a pulse) and a grey **LONG** bar at the bottom of the view indicates that
+  holding DOWN is what advances. Short articles still advance on a tap.
 - **The article scrolls by layer frame — proven to render on the Time 2**:
   the ScrollLayer was abandoned. It moves its content sub-layer by mutating
   the sub-layer's *bounds origin*; on the user's emery that path advances
