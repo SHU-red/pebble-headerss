@@ -75,6 +75,8 @@ static char s_title[24]; // stream title (top bar)
 static int32_t s_idx;        // current article (ring-buffer index)
 static bool s_advancing;     // true while a page transition runs
 static bool s_advance_guard; // at most one advance per article
+static bool s_scroll_mode;   // long article: entered by HOLD DOWN, tap then
+                             // scrolls; reset on every article change
 
 static int16_t s_win_w;
 static int16_t s_win_h;
@@ -1078,12 +1080,16 @@ static void page_set_offset(Page *p, int32_t y) {
 
 #define END_BAR_H 16
 
-//! "HOLD DOWN" hint at the bottom of the view while the reader sits at the
-//! very end of a long article: a tap there is held back (the advance needs
-//! an explicit HOLD), so the hint tells the user why. Text-only in the
-//! muted theme color — no bar fill, so nothing is painted over the article;
-//! the content itself scrolls one extra line so the last article line
-//! clears the hint (page_scroll_min). Empty at every other position.
+//! "- HOLD DOWN -" hint at the bottom of the view, two meanings:
+//! - initial view of a LONG article (not in scroll mode): HOLD DOWN enters
+//!   scroll mode (tap still skips) — the prompt to read this one instead of
+//!   breezing past it;
+//! - scrolled to the very end (scroll mode): HOLD DOWN advances, the tap
+//!   there is held back (the advance needs the explicit HOLD).
+//! Text-only in the muted theme color — no bar fill, so nothing is painted
+//! over the article; the content itself scrolls one extra line so the last
+//! article line clears the hint (page_scroll_min). Empty at every other
+//! position.
 static void end_bar_update(Layer *layer, GContext *ctx) {
   if (s_count == 0 || !cur_page() || !cur_page()->content) {
     return;
@@ -1091,10 +1097,17 @@ static void end_bar_update(Layer *layer, GContext *ctx) {
   const Page *p = cur_page();
   int32_t off = layer_get_frame(p->content).origin.y;
   bool long_article = (p->content_h > s_view_h + 8); // a real scroll area
-  bool at_bottom = (off <= page_scroll_min(p) + 2);
-  if (!long_article || !at_bottom) {
+  if (!long_article) {
     return;
   }
+  if (s_scroll_mode) {
+    bool at_bottom = (off <= page_scroll_min(p) + 2);
+    if (!at_bottom) {
+      return; // end hint only at the very bottom
+    }
+  }
+  // Initial mode: the prompt shows the whole time (the article sits at the
+  // top there); scroll mode: only at the bottom.
   GRect b = layer_get_bounds(layer);
   graphics_context_set_text_color(ctx, theme_muted());
   graphics_draw_text(ctx, "- HOLD DOWN -",
@@ -1522,6 +1535,7 @@ static void transition_finalize(void) {
   s_cur = 1 - s_cur;
   s_advancing = false;
   s_advance_guard = false;
+  s_scroll_mode = false; // every article starts in the tap-to-skip view
   mark_timer_start(s_idx);
   full_summary_request(s_idx);
   full_summary_apply(); // heal: apply a completed fetch if the chunk path missed it
@@ -1642,32 +1656,49 @@ static void maybe_regress(void) {
 // Buttons
 // ---------------------------------------------------------------------------
 
-//! UP scrolls the article up by one viewport; at the top it goes back to
-//! the previously read article (still in the ring from this session). The
-//! SDK's offset is the content origin: negative when scrolled, 0 at the top.
+//! UP: in the initial view it goes back to the previously read article
+//! (mirroring DOWN = next). Inside scroll mode it scrolls the article up by
+//! one viewport; at the top it exits scroll mode back to the initial view
+//! (a further UP then regresses). The SDK's offset is the content origin:
+//! negative when scrolled, 0 at the top.
 static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing) {
     return;
   }
   Page *p = cur_page();
+  if (!s_scroll_mode) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "nav: UP (initial) -> previous");
+    maybe_regress();
+    return;
+  }
   int32_t off = layer_get_frame(p->content).origin.y;
-  APP_LOG(APP_LOG_LEVEL_INFO, "nav: UP off=%ld", (long)off);
+  APP_LOG(APP_LOG_LEVEL_INFO, "nav: UP off=%ld scroll-mode", (long)off);
   if (off < 0) {
     int32_t target = off + (s_view_h - 24);
     if (target > 0) {
       target = 0;
     }
     page_set_offset(p, target);
+    if (target == 0) {
+      s_scroll_mode = false; // at the top: back to the initial view
+      if (s_end_bar) {
+        layer_mark_dirty(s_end_bar); // the prompt re-appears
+      }
+    }
   } else {
-    maybe_regress();
+    s_scroll_mode = false; // already at the top: just exit scroll mode
+    if (s_end_bar) {
+      layer_mark_dirty(s_end_bar);
+    }
   }
 }
 
-//! DOWN scrolls the article by ~3/4 viewport; at the true bottom of the
-//! text it advances to the next article. No fetch-hold: pressing DOWN while
-//! the full summary is still loading proceeds anyway (fast reading). Any
-//! overflow — even a few pixels of a cut last line — scrolls first, so the
-//! bottom of the summary is always revealed before the next article.
+//! DOWN: the initial view ALWAYS skips to the next article (fast skimming —
+//! a long article's "- HOLD DOWN -" prompt invites a hold to read it).
+//! Inside scroll mode it page-scrolls ~3/4 viewport; at the true bottom of
+//! the text the tap is held back (the advance needs the explicit HOLD, the
+//! pulse confirms the press). No fetch-hold: pressing DOWN while the full
+//! summary is still loading proceeds anyway (fast reading).
 static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   if (s_count == 0 || s_advancing || s_advance_guard) {
     APP_LOG(APP_LOG_LEVEL_INFO, "nav: DOWN ignored (count=%ld adv=%d guard=%d)",
@@ -1675,6 +1706,11 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
     return;
   }
   Page *p = cur_page();
+  if (!s_scroll_mode) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "nav: DOWN (initial) -> next");
+    maybe_advance();
+    return;
+  }
   int32_t off = layer_get_frame(p->content).origin.y;
   int32_t content_h = p->content_h;
   int32_t min_y = page_scroll_min(p);
@@ -1687,41 +1723,16 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
           "nav: DOWN off=%ld frame=%d cont=%ld bottom=%d",
           (long)off, s_view_h, (long)content_h, (int)at_bottom);
   if (at_bottom) {
-    if (content_h > s_view_h + 8) {
-      // End of a LONG article: one fast tap must not throw the reader past
-      // it — the scroll state is lost and getting back means re-scrolling
-      // from the heading. Advance only on an explicit HOLD (the grey LONG
-      // bar at the bottom says so); the pulse confirms the press.
-      APP_LOG(APP_LOG_LEVEL_INFO,
-              "nav: long-article end — hold DOWN to advance");
-      vibes_short_pulse();
-      if (s_end_bar) {
-        layer_mark_dirty(s_end_bar);
-      }
-      return;
+    // End of the scroll: one fast tap must not throw the reader past the
+    // article — the scroll state is lost. Advance only on an explicit HOLD
+    // (the "- HOLD DOWN -" hint at the bottom says so); the pulse confirms
+    // the press.
+    APP_LOG(APP_LOG_LEVEL_INFO,
+            "nav: scroll end — hold DOWN to advance");
+    vibes_short_pulse();
+    if (s_end_bar) {
+      layer_mark_dirty(s_end_bar);
     }
-    maybe_advance();
-    return;
-  }
-  // The chrome is tight now: near-fit articles (content up to ~8 px over the
-  // viewport — a sub-perceptual sliver of the last line) advance on ONE
-  // press instead of performing an invisible 8 px scroll. Genuinely long
-  // text (a full line or more over) keeps the visible page-scroll.
-  // EXCEPT while the full summary of this article is still loading: the
-  // preview is short BECAUSE the fetch is in flight, not because the article
-  // is short — advancing then would skip the article the user is reading.
-  // Hold; the (repeating) press scrolls once the full text lands.
-  if (content_h <= s_view_h + 8) {
-    bool fetching_here = (s_full_idx == s_idx && s_full_fetching &&
-                          !s_full_done);
-    if (fetching_here) {
-      APP_LOG(APP_LOG_LEVEL_INFO,
-              "nav: fetch in flight, preview fits — hold");
-      return;
-    }
-    APP_LOG(APP_LOG_LEVEL_INFO, "nav: fits (cont=%ld frame=%d), advance",
-            (long)content_h, s_view_h);
-    maybe_advance();
     return;
   }
   // Page-down: ~3/4 viewport per press (a small overlap keeps the previous
@@ -1781,10 +1792,22 @@ static void timeline_star_long_click(ClickRecognizerRef rec, void *ctx) {
   }
 }
 
-//! HOLD DOWN: jump to the next article without scrolling through the text
-//! (a long article used to need ~19 page-downs). The tap still page-scrolls;
-//! the advance guard (cleared at the settle) keeps one jump per hold.
+//! HOLD DOWN: on a LONG article's initial view it ENTERS scroll mode (tap
+//! then scrolls; the "- HOLD DOWN -" prompt at the bottom invites this).
+//! In scroll mode — or on a short article — it jumps to the next article.
+//! The advance guard (cleared at the settle) keeps one jump per hold.
 static void timeline_down_hold_click(ClickRecognizerRef rec, void *ctx) {
+  Page *p = cur_page();
+  bool long_article = (p && p->content_h > s_view_h + 8);
+  if (!s_scroll_mode && long_article) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "nav: hold DOWN -> scroll mode");
+    s_scroll_mode = true;
+    vibes_short_pulse();
+    if (s_end_bar) {
+      layer_mark_dirty(s_end_bar); // the prompt hides until the end
+    }
+    return;
+  }
   APP_LOG(APP_LOG_LEVEL_INFO, "nav: hold DOWN -> next");
   maybe_advance();
 }
@@ -1872,6 +1895,7 @@ static void timeline_window_load(Window *window) {
   s_status_check_path = gpath_create(&UI_CHECK_PATH_INFO);
   s_dither_bitmap = gbitmap_create_with_data(s_dither_pbi);
   s_cur = 0;
+  s_scroll_mode = false;
   s_pages[0].idx = -1;
   s_pages[1].idx = -1;
 

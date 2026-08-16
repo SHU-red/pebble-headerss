@@ -5,10 +5,16 @@
 **HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
 articles full-screen, mark read, star favourites, highlight words.
 
-**v0.3.37**
+**v0.3.38**
+- Fast skimming: DOWN always jumps to the next article; long articles
+  invite a hold with a centered "- HOLD DOWN -" hint
+- Hold DOWN enters scroll mode: taps scroll page by page, a hold jumps
+  to the next article at any time, at the end the hint says hold to
+  continue
+- UP mirrors DOWN: previous article in the skim view, scroll-up inside
+  scroll mode, exits back to the skim view at the top
 - Read articles in full — nothing is ever cut off; long articles scroll
   smoothly on every watch
-- Hold UP/DOWN jumps between articles, tap scrolls page by page
 - Editorial reader: bold white headings with an accent feed·time line,
   word highlighting in your accent color
 - Theme on the watch: one tap cycles System → Dark → Light
@@ -16,6 +22,21 @@ articles full-screen, mark read, star favourites, highlight words.
 - Star favourites, unread-only mode, auto-mark-read, per-feed
   mark-all-read
 - Highlight words survive reinstalls
+
+## 0.3.38
+
+- **New article-read flow.** DOWN now always skips to the next article
+  (fast skimming — no more accidentally reading). On long articles a
+  centered "- HOLD DOWN -" hint sits at the bottom of the skim view:
+  holding enters scroll mode.
+- **Scroll mode:** single DOWN taps page-scroll (~3/4 viewport); holding
+  DOWN jumps to the next article at any time (the tap at the very end is
+  held back with a pulse — advance is hold-only, the "- HOLD DOWN -"
+  hint reappears at the end). UP scrolls back up and exits scroll mode
+  at the top; a further UP goes to the previous article. Short articles
+  never enter scroll mode: hold just jumps.
+- Every article still starts in the skim view (scroll mode resets on
+  transitions), so skipping through a feed never gets stuck mid-scroll.
 
 ## 0.3.37
 
