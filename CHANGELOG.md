@@ -16,6 +16,18 @@ articles full-screen, mark read, star favourites, highlight words.
   mark-all-read
 - Highlight words survive reinstalls
 
+## 0.3.35
+
+- **Progress bar**: 1 px thicker (2 → 3 px) and the big position dot is gone —
+  the accent fill's edge marks the current article. The settle flash is
+  removed with it (there was nothing left to flash).
+- **Sidebar clock**: sits at the very top now — plain black GOTHIC_14_BOLD
+  digits on the accent bar, no chip, no border.
+- **Article heading**: smaller (GOTHIC_24_BOLD) and colorized in the accent
+  color; highlighted words invert to a theme chip (white with black text in
+  dark mode, black with white text in light) so they still pop on the
+  accent heading.
+
 ## 0.3.34
 
 **Tier A + Tier B design overhaul** (the full idea list, implemented):

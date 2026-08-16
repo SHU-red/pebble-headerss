@@ -11,7 +11,7 @@
 // stream in from the phone into a ring buffer. The reader is a paged
 // full-screen view: a 2 px accent progress line along the very top, a theme
 // top bar (stream name) below it, one article per page — an editorial
-// header (GOTHIC_28_BOLD heading on the page background, muted feed·time
+// header (GOTHIC_24_BOLD accent heading on the page background, muted feed·time
 // meta, a 2 px accent rule), a scrollable summary body — and a slim accent
 // SIDEBAR on the right holding the clock chip, the read/unread dot, the
 // star and the highlight-word M badge. Page changes slide with a
@@ -19,8 +19,7 @@
 // incoming one enters — no teleport cut).
 // ---------------------------------------------------------------------------
 
-#define PROGRESS_H 2      // accent progress line along the very top (y=0..2)
-#define PROGRESS_DOT_H 8  // position dot diameter (extends below the line)
+#define PROGRESS_H 3      // accent progress line along the very top (y=0..3)
 #define TOP_BAR_H 24      // theme top bar with the stream name (starts y=2)
 #define DIVIDER_H 1       // hairline divider under the top bar (P6)
 #define SIDEBAR_W 20      // slim accent sidebar holding the icons (P14: 26 -> 20)
@@ -29,20 +28,18 @@
 // Sidebar icons: monochrome (inactive = black, active = white — except the
 // highlight M chip, which uses the shared alarm color), stacked in a
 // vertically-centered column beside the physical SELECT button. The stack
-// (22+12+16+12+18 = 78 px) starts below the clock chip (top 6, height 36 ->
-// bottom 42) on every target: the P3 overlap on 144×168 is gone (stack top
-// there = (168-78)/2 = 45 > 42).
+// (22+12+16+12+18 = 78 px) starts below the plain clock digits (two 17 px
+// rows from y=1 -> bottom 35) on every target: the P3 overlap on 144×168
+// is gone (stack top there = (168-78)/2 = 45 > 35).
 #define SIDEBAR_ICON_GAP 12 // vertical gap between the indicators
 #define SIDEBAR_DISC_D 16   // read/unread disc diameter
 #define SIDEBAR_STAR_H 22   // fav star height
 #define SIDEBAR_MAG_H 18    // match magnifier / M chip height
 #define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 78) / 2)
-// Clock chip in the sidebar's top: 2 rows of GOTHIC_14_BOLD digits in a
-// black rounded chip with a 1 px white border (the border keeps the black
-// chip visible on dark accents — P11).
-#define SIDEBAR_CLOCK_W 18
-#define SIDEBAR_CLOCK_H 36
-#define SIDEBAR_CLOCK_TOP 6
+// Clock at the sidebar's very top: 2 rows of GOTHIC_14_BOLD digits, plain
+// black text on the accent bar — no chip, no border (0.3.35).
+#define SIDEBAR_CLOCK_W 18 // digit box width (2 GOTHIC_14 digits fit)
+#define SIDEBAR_CLOCK_TOP 1 // first digit row starts at the very top
 
 // Highlight alarm color: the highlight M badge and ALL matched words (body
 // and title) share this one color so the connection is obvious.
@@ -94,8 +91,7 @@ static TextLayer *s_top_text;
 static Layer *s_sidebar;   // accent bar with the eye/star/M icons
 static Layer *s_end_bar;   // grey "LONG" hint at the bottom of a long article
 static AppTimer *s_clock_timer; // 1-minute tick: redraws the sidebar clock
-static bool s_progress_pulse;  // the progress thumb flashes on each settle
-static AppTimer *s_progress_pulse_timer;
+
 static TextLayer *s_status;   // full-screen "Loading..." / "All caught up"
 static Layer *s_status_check; // accent GPath check above the status text
 static TextLayer *s_status_hint; // small hint under the status text
@@ -283,16 +279,14 @@ static void format_reltime(char *buf, size_t len, int32_t published) {
 // Static chrome: progress line + top bar + sidebar
 // ---------------------------------------------------------------------------
 
-//! 2 px progress line along the very top of the screen (y = 0..2), above
-//! the black top bar: the read portion (left of the current position) is a
-//! full accent fill, the unread remainder stays the muted track, and a BIG
-//! accent dot marks the current article position (PROGRESS_DOT_H diameter,
-//! extending into the top bar so it is clearly visible). The dot flashes
-//! bright (theme_fg) for ~160 ms on every article change
-//! (progress_pulse_start). Gated by the progress setting. The denominator
-//! is the larger of the announced page size (s_page_announced, set by
-//! timeline_page_begin) and the actual loaded count, so with s_count == 1
-//! on entry the dot starts near 0 (1/50 of the page) instead of 100%.
+//! 3 px progress line along the very top of the screen (y = 0..3), above
+//! the top bar: the read portion (left of the current position) is a full
+//! accent fill, the unread remainder stays the muted track. No position
+//! dot (0.3.35: the 8 px circle is gone — the fill edge marks the spot).
+//! Gated by the progress setting. The denominator is the larger of the
+//! announced page size (s_page_announced, set by timeline_page_begin) and
+//! the actual loaded count, so with s_count == 1 on entry the fill starts
+//! near 0 (1/50 of the page) instead of 100%.
 static void progress_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   if (setting_progress() && s_count > 0) {
@@ -309,7 +303,7 @@ static void progress_update(Layer *layer, GContext *ctx) {
         w = max_w;
       }
       // The muted track (the unread remainder, untouched) — rounded caps
-      // (radius 1 on the 2 px line) so the bar reads as a modern scrollbar.
+      // (radius 1) so the bar reads as a modern scrollbar.
       graphics_context_set_fill_color(ctx, theme_muted());
       graphics_fill_rect(ctx, GRect(0, 0, max_w, PROGRESS_H), 1, GCornersAll);
       // The read portion (left of the position) in the full accent.
@@ -317,40 +311,7 @@ static void progress_update(Layer *layer, GContext *ctx) {
         graphics_context_set_fill_color(ctx, s_accent);
         graphics_fill_rect(ctx, GRect(0, 0, w, PROGRESS_H), 1, GCornersAll);
       }
-      // The position dot: a big circle centered on the position, kept
-      // inside the sidebar cap at the last article.
-      int16_t cx = w;
-      if (cx < PROGRESS_DOT_H / 2) {
-        cx = PROGRESS_DOT_H / 2;
-      }
-      if (cx > max_w - PROGRESS_DOT_H / 2) {
-        cx = max_w - PROGRESS_DOT_H / 2;
-      }
-      graphics_context_set_fill_color(ctx,
-                                      s_progress_pulse ? theme_fg() : s_accent);
-      graphics_fill_circle(ctx, GPoint(cx, PROGRESS_DOT_H / 2 + 1),
-                           PROGRESS_DOT_H / 2);
     }
-  }
-}
-
-//! The thumb's settle flash: bright for ~160 ms, then back to the accent.
-static void progress_pulse_cb(void *data) {
-  s_progress_pulse_timer = NULL;
-  s_progress_pulse = false;
-  if (s_prog_line) {
-    layer_mark_dirty(s_prog_line);
-  }
-}
-
-static void progress_pulse_start(void) {
-  if (s_progress_pulse_timer) {
-    app_timer_cancel(s_progress_pulse_timer);
-  }
-  s_progress_pulse = true;
-  s_progress_pulse_timer = app_timer_register(160, progress_pulse_cb, NULL);
-  if (s_prog_line) {
-    layer_mark_dirty(s_prog_line);
   }
 }
 
@@ -425,31 +386,23 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
     graphics_context_set_compositing_mode(ctx, GCompOpAssign);
   }
 
-  // 2-row clock in the sidebar's otherwise-wasted top: hours over minutes,
-  // accent digits on a black rounded chip with a 1 px white border (the
-  // border keeps the black chip visible on dark accents).
+  // 2-row clock at the sidebar's very top: hours over minutes, plain black
+  // digits on the accent bar — no chip, no border (0.3.35).
   int16_t ccx = b.size.w / 2;
   time_t now = time(NULL);
   struct tm *lt = localtime(&now);
   if (lt) {
     char tbuf[4];
-    GRect chip = GRect(ccx - SIDEBAR_CLOCK_W / 2, SIDEBAR_CLOCK_TOP,
-                       SIDEBAR_CLOCK_W, SIDEBAR_CLOCK_H);
-    graphics_context_set_fill_color(ctx, GColorBlack);
-    graphics_fill_rect(ctx, chip, 4, GCornersAll);
-    graphics_context_set_stroke_color(ctx, GColorWhite);
-    graphics_context_set_stroke_width(ctx, 1);
-    graphics_draw_rect(ctx, chip);
-    graphics_context_set_text_color(ctx, s_accent);
+    graphics_context_set_text_color(ctx, GColorBlack);
     snprintf(tbuf, sizeof(tbuf), "%d", lt->tm_hour);
     graphics_draw_text(ctx, tbuf, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                       GRect(ccx - SIDEBAR_CLOCK_W / 2, SIDEBAR_CLOCK_TOP + 1,
+                       GRect(ccx - SIDEBAR_CLOCK_W / 2, SIDEBAR_CLOCK_TOP,
                              SIDEBAR_CLOCK_W, 17),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
                        NULL);
     snprintf(tbuf, sizeof(tbuf), "%02d", lt->tm_min);
     graphics_draw_text(ctx, tbuf, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                       GRect(ccx - SIDEBAR_CLOCK_W / 2, SIDEBAR_CLOCK_TOP + 18,
+                       GRect(ccx - SIDEBAR_CLOCK_W / 2, SIDEBAR_CLOCK_TOP + 17,
                              SIDEBAR_CLOCK_W, 17),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
                        NULL);
@@ -1381,11 +1334,14 @@ static int header_page_idx(Layer *header) {
 }
 
 //! Editorial header (P13/P4): page background — no accent band. The heading
-//! reads in theme_fg at GOTHIC_28_BOLD with accent-filled highlight words
-//! (black text on the accent, the app's accent-surface treatment), the
-//! feed·time meta sits at the bottom in muted GOTHIC_14, and a 2 px accent
-//! rule closes the header like a newspaper dateline. The read state lives
-//! in the sidebar icons, not the colors.
+//! reads in the ACCENT color at GOTHIC_24_BOLD (0.3.35: smaller than the
+//! first overhaul's 28, and accent-colored instead of theme_fg) with
+//! highlighted words on a theme_fg chip in the page color (a white chip
+//! with black text in dark mode, black chip with white text in light — the
+//! inverted-accent treatment), the feed·time meta sits at the bottom in
+//! muted GOTHIC_14, and a 2 px accent rule closes the header like a
+//! newspaper dateline. The read state lives in the sidebar icons, not the
+//! colors.
 static void header_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
 
@@ -1402,7 +1358,7 @@ static void header_update(Layer *layer, GContext *ctx) {
   if (!a) {
     return;
   }
-  GFont heading_font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
+  GFont heading_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   int16_t text_w = (int16_t)(b.size.w - SIDEBAR_W - 8);
   // The feed·time line lives at the header's bottom, above the accent rule;
   // a clamped long title must not draw under it.
@@ -1417,11 +1373,12 @@ static void header_update(Layer *layer, GContext *ctx) {
   // The 2 px accent rule under the meta (editorial dateline).
   graphics_context_set_fill_color(ctx, s_accent);
   graphics_fill_rect(ctx, GRect(4, b.size.h - 3, text_w, 2), 0, GCornerNone);
-  // The heading: theme_fg text, accent-filled highlight words with black
-  // text. The LAST line's bottom is 2 + head_layout.height =
+  // The heading: accent text, highlighted words on a theme_fg chip in the
+  // page color (inverted-accent, so the highlight pops on the accent
+  // heading). The LAST line's bottom is 2 + head_layout.height =
   // b.size.h - HEADER_META_H + 2; the y_limit guards the meta line below.
   hl_draw(ctx, a->title, &p->head_layout, 4, 2, heading_font, heading_font,
-          theme_fg(), s_accent, GColorBlack,
+          s_accent, theme_fg(), theme_bg(),
           (int16_t)(b.size.h - HEADER_META_H + 2));
 }
 
@@ -1436,17 +1393,18 @@ static void page_build(Page *p, int32_t idx) {
   p->idx = idx;
 
   // Cached highlight layouts: heading (the FULL title, multi-line, no
-  // ellipsis cap; GOTHIC_28_BOLD throughout, highlighted words drawn on an
-  // accent fill) and summary body (unlimited lines, base GOTHIC_18 with
-  // GOTHIC_18_BOLD for highlighted words).
+  // ellipsis cap; GOTHIC_24_BOLD throughout — smaller than the 28 of the
+  // first overhaul, and drawn in the accent color by header_update;
+  // highlighted words sit on a theme_fg chip) and summary body (unlimited
+  // lines, base GOTHIC_18 with GOTHIC_18_BOLD for highlighted words).
   GFont gothic18 = fonts_get_system_font(FONT_KEY_GOTHIC_18);
   GFont gothic18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
-  GFont gothic28b = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
+  GFont gothic24b = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   int16_t text_w = (int16_t)(s_win_w - SIDEBAR_W - 8);
   hl_build_layout(&(HlBuildParams){
     .text = a->title,
-    .base_font = gothic28b,
-    .hl_font = gothic28b,
+    .base_font = gothic24b,
+    .hl_font = gothic24b,
     .width = text_w,
     .max_lines = 0,
     .out = &p->head_layout,
@@ -1583,7 +1541,6 @@ static void transition_finalize(void) {
   }
   if (s_prog_line) {
     layer_mark_dirty(s_prog_line); // progress line follows the new index
-    progress_pulse_start(); // the thumb flashes on each settle
   }
   if (s_end_bar) {
     layer_mark_dirty(s_end_bar); // the LONG hint follows the new article
@@ -1947,11 +1904,9 @@ static void timeline_window_load(Window *window) {
   text_layer_set_text(s_top_text, s_title);
   layer_add_child(root, text_layer_get_layer(s_top_text));
 
-  // Progress line + position dot along the very top (y = 0..2 line, the
-  // position dot extends into the top bar). Added AFTER the top bar so the
-  // dot draws over it; the sidebar is added later and the dot is capped
-  // before it.
-  s_prog_line = layer_create(GRect(0, 0, s_win_w, PROGRESS_H + PROGRESS_DOT_H));
+  // Progress line along the very top (y = 0..PROGRESS_H). The old position
+  // dot is gone (0.3.35); the layer is exactly the bar height now.
+  s_prog_line = layer_create(GRect(0, 0, s_win_w, PROGRESS_H));
   layer_set_update_proc(s_prog_line, progress_update);
   layer_add_child(root, s_prog_line);
 
@@ -2011,11 +1966,6 @@ static void timeline_close(void) {
   if (s_clock_timer) {
     app_timer_cancel(s_clock_timer);
     s_clock_timer = NULL;
-  }
-  if (s_progress_pulse_timer) {
-    app_timer_cancel(s_progress_pulse_timer);
-    s_progress_pulse_timer = NULL;
-    s_progress_pulse = false;
   }
   full_summary_reset(); // free the assembled full text
   transition_watchdog_cancel();
@@ -2273,7 +2223,6 @@ void timeline_collect_article(DictionaryIterator *iter) {
     }
     if (s_prog_line) {
       layer_mark_dirty(s_prog_line); // progress line appears with the article
-      progress_pulse_start(); // the thumb flashes on the first article too
     }
     mark_timer_start(0);
     full_summary_request(0);
