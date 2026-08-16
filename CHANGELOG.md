@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.29
+
+- **"HOLD DOWN" end hint redesigned**: the hint at the end of a long
+  article is now centered text (`- HOLD DOWN -`) in the muted theme color
+  instead of a grey bar — nothing is painted over the article. The content
+  scrolls one extra line so the article's last line is never hidden behind
+  the hint; the tap-hold-back logic is unchanged.
+
 ## 0.3.28
 
 - **NEW-dot removed**: the "newer than your last visit" marker is gone —

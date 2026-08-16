@@ -988,12 +988,24 @@ static void page_resize(Page *p) {
   }
 }
 
+//! The furthest the content can scroll. Long articles (which show the
+//! HOLD DOWN hint) get one extra line of scroll room so the article's last
+//! line is never hidden behind the hint; short articles keep the plain
+//! bottom (content bottom == view bottom).
+static int32_t page_scroll_min(const Page *p) {
+  int32_t min_y = s_view_h - p->content_h;
+  if (p->content_h > s_view_h + 8 && p->body_layout.line_h > 0) {
+    min_y -= p->body_layout.line_h;
+  }
+  return min_y;
+}
+
 //! Manual scroll: move the page's content wrapper by frame — the only
 //! movement mechanism proven to render on the user's emery (settles move
 //! page roots with layer_set_frame; the ScrollLayer's bounds-origin path
 //! never redraws there). Single clamp authority for the scroll offset.
 static void page_set_offset(Page *p, int32_t y) {
-  int32_t min_y = s_view_h - p->content_h;
+  int32_t min_y = page_scroll_min(p);
   if (y < min_y) {
     y = min_y;
   }
@@ -1003,16 +1015,18 @@ static void page_set_offset(Page *p, int32_t y) {
   layer_set_frame(p->content, GRect(0, y, s_win_w, p->content_h));
   layer_mark_dirty(p->content);
   if (s_end_bar) {
-    layer_mark_dirty(s_end_bar); // the LONG hint follows the bottom state
+    layer_mark_dirty(s_end_bar); // the HOLD DOWN hint follows the bottom state
   }
 }
 
 #define END_BAR_H 16
 
-//! Grey "LONG" hint pinned to the bottom of the view while the reader sits
-//! at the very end of a long article: a tap there is held back (the
-//! advance needs an explicit HOLD), so the hint tells the user why.
-//! Transparent (no fill) at every other position/article.
+//! "HOLD DOWN" hint at the bottom of the view while the reader sits at the
+//! very end of a long article: a tap there is held back (the advance needs
+//! an explicit HOLD), so the hint tells the user why. Text-only in the
+//! muted theme color — no bar fill, so nothing is painted over the article;
+//! the content itself scrolls one extra line so the last article line
+//! clears the hint (page_scroll_min). Empty at every other position.
 static void end_bar_update(Layer *layer, GContext *ctx) {
   if (s_count == 0 || !cur_page() || !cur_page()->content) {
     return;
@@ -1020,19 +1034,16 @@ static void end_bar_update(Layer *layer, GContext *ctx) {
   const Page *p = cur_page();
   int32_t off = layer_get_frame(p->content).origin.y;
   bool long_article = (p->content_h > s_view_h + 8); // a real scroll area
-  bool at_bottom = (off <= s_view_h - p->content_h + 2);
+  bool at_bottom = (off <= page_scroll_min(p) + 2);
   if (!long_article || !at_bottom) {
     return;
   }
   GRect b = layer_get_bounds(layer);
-  graphics_context_set_fill_color(ctx, theme_muted());
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, theme_bg());
-  graphics_draw_text(ctx, "LONG",
-                     fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                     GRect(0, 0, b.size.w, b.size.h),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
-                     NULL);
+  graphics_context_set_text_color(ctx, theme_muted());
+  graphics_draw_text(ctx, "- HOLD DOWN -",
+                     fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                     b, GTextOverflowModeTrailingEllipsis,
+                     GTextAlignmentCenter, NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -1599,10 +1610,12 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   Page *p = cur_page();
   int32_t off = layer_get_frame(p->content).origin.y;
   int32_t content_h = p->content_h;
-  // The offset is clamped to [s_view_h - content_h, 0] — the content
-  // origin: 0 at the top, NEGATIVE when scrolled, s_view_h - content_h at
-  // the very bottom. "At the bottom" is off <= s_view_h - content_h.
-  bool at_bottom = (off <= s_view_h - content_h + 2);
+  int32_t min_y = page_scroll_min(p);
+  // The offset is clamped to [min_y, 0] — the content origin: 0 at the
+  // top, NEGATIVE when scrolled, min_y at the very bottom (long articles
+  // leave one line clear of the HOLD DOWN hint). "At the bottom" is
+  // off <= min_y.
+  bool at_bottom = (off <= min_y + 2);
   APP_LOG(APP_LOG_LEVEL_INFO,
           "nav: DOWN off=%ld frame=%d cont=%ld bottom=%d",
           (long)off, s_view_h, (long)content_h, (int)at_bottom);
@@ -1649,7 +1662,6 @@ static void timeline_down_click(ClickRecognizerRef rec, void *ctx) {
   // on the bottom so the last word is clearly visible.
   int32_t step = (s_view_h * 3) / 4;
   int32_t target = off - step;
-  int32_t min_y = s_view_h - content_h;
   if (target < min_y) {
     target = min_y;
   }
