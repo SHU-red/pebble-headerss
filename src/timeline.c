@@ -34,7 +34,7 @@
 #define SIDEBAR_ICON_GAP 12 // vertical gap between the indicators
 #define SIDEBAR_DISC_D 16   // read/unread disc diameter
 #define SIDEBAR_STAR_H 22   // fav star height
-#define SIDEBAR_MAG_H 18    // match magnifier / M chip height
+#define SIDEBAR_MAG_H 18    // M badge chip height
 #define SIDEBAR_ICON_TOP(s_win_h) (((s_win_h) - 78) / 2)
 // Clock at the sidebar's very top: 2 rows of GOTHIC_14_BOLD digits, plain
 // black text on the accent bar — no chip, no border (0.3.35).
@@ -362,11 +362,11 @@ static GBitmap *s_dither_bitmap;
 
 //! Accent sidebar (full screen height, y = 0..s_win_h) holding three
 //! indicators VERTICALLY CENTERED beside the SELECT button, in the order
-//! star, circle, M/magnifier: favourite star (chrome-yellow + black outline
+//! star, circle, M badge: favourite star (chrome-yellow + black outline
 //! when starred, black when not — P2), read/unread disc (filled white =
 //! unread, nothing when read — the classic unread-dot idiom, P2) and the
 //! highlight match (alarm-red rounded chip with a white "M" when the
-//! current article matches a highlight word, plain black magnifier
+//! current article matches a highlight word, red chip + white M otherwise
 //! otherwise — P1).
 static void sidebar_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
@@ -441,8 +441,10 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
   }
   y += SIDEBAR_DISC_D + SIDEBAR_ICON_GAP;
 
-  // 3. Match: an alarm-red rounded chip with a white "M" when the current
-  // article has highlight-word matches, a plain black magnifier otherwise.
+  // 3. Match: the badge is always an "M" — accent M on a black rounded
+  // chip by default (the chip is the "area" that turns alarm-red when the
+  // current article matches a highlight word; the M then flips to white
+  // for contrast on the red).
   bool matched = false;
   for (int i = 0; i < 2; i++) {
     const Page *pg = &s_pages[i];
@@ -451,24 +453,16 @@ static void sidebar_update(Layer *layer, GContext *ctx) {
       break;
     }
   }
-  if (matched) {
-    GRect chip = GRect(cx - 8, y + 1, 16, 16);
-    graphics_context_set_fill_color(ctx, HL_ALARM_COLOR);
-    graphics_fill_rect(ctx, chip, 4, GCornersAll);
-    graphics_context_set_text_color(ctx, GColorWhite);
-    graphics_draw_text(ctx, "M", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                       GRect(chip.origin.x, chip.origin.y - 2,
-                             chip.size.w, chip.size.h),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
-                       NULL);
-  } else {
-    graphics_context_set_stroke_color(ctx, GColorBlack);
-    graphics_context_set_stroke_width(ctx, 2);
-    GPoint center = GPoint(cx, y + SIDEBAR_MAG_H / 2 - 3);
-    graphics_draw_circle(ctx, center, 6);
-    graphics_draw_line(ctx, GPoint(center.x + 4, center.y + 4),
-                       GPoint(center.x + 8, center.y + 8));
-  }
+  GRect chip = GRect(cx - 8, y + 1, 16, 16);
+  graphics_context_set_fill_color(ctx,
+                                  matched ? HL_ALARM_COLOR : GColorBlack);
+  graphics_fill_rect(ctx, chip, 4, GCornersAll);
+  graphics_context_set_text_color(ctx, matched ? GColorWhite : s_accent);
+  graphics_draw_text(ctx, "M", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                     GRect(chip.origin.x, chip.origin.y - 2,
+                           chip.size.w, chip.size.h),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
+                     NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -1893,10 +1887,11 @@ static void timeline_window_load(Window *window) {
   layer_set_update_proc(s_divider, divider_update);
   layer_add_child(root, s_divider);
 
-  // Top bar: stream name in ROBOTO_CONDENSED_21 (narrower — more chars fit)
-  // in theme_fg (white on the black crown in dark, black on white in light).
+  // Top bar: stream name in GOTHIC_18_BOLD (0.3.36: smaller than the
+  // ROBOTO_CONDENSED_21 of the overhaul) in theme_fg (white on the black
+  // crown in dark, black on white in light).
   s_top_text = text_layer_create(GRect(4, PROGRESS_H, s_win_w - SIDEBAR_W - 8, TOP_BAR_H));
-  text_layer_set_font(s_top_text, fonts_get_system_font(FONT_KEY_ROBOTO_CONDENSED_21));
+  text_layer_set_font(s_top_text, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_top_text, GTextAlignmentLeft);
   text_layer_set_overflow_mode(s_top_text, GTextOverflowModeTrailingEllipsis);
   text_layer_set_background_color(s_top_text, GColorClear);
@@ -2384,6 +2379,7 @@ void timeline_highlight_words_changed(void) {
   }
   GFont gothic18 = fonts_get_system_font(FONT_KEY_GOTHIC_18);
   GFont gothic18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  GFont gothic24b = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   int16_t text_w = (int16_t)(s_win_w - SIDEBAR_W - 8);
   for (int i = 0; i < 2; i++) {
     Page *p = &s_pages[i];
@@ -2391,8 +2387,11 @@ void timeline_highlight_words_changed(void) {
       continue;
     }
     const Article *a = &s_articles[p->idx];
+    // The heading re-layout must use the same font as page_build
+    // (GOTHIC_24_BOLD) — it used GOTHIC_18_BOLD before 0.3.36, so a
+    // word change while reading shrank the heading.
     hl_build_layout(&(HlBuildParams){
-      .text = a->title, .base_font = gothic18b, .hl_font = gothic18b,
+      .text = a->title, .base_font = gothic24b, .hl_font = gothic24b,
       .width = text_w, .max_lines = 0, .out = &p->head_layout,
     });
     // The body text depends on the full-summary state: the heap buffer when

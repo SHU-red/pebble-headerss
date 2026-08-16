@@ -16,6 +16,19 @@ articles full-screen, mark read, star favourites, highlight words.
   mark-all-read
 - Highlight words survive reinstalls
 
+## 0.3.36
+
+- **Match badge rework**: the magnifier is gone — the badge is always an
+  "M". By default it's an accent "M" on a small black rounded chip; when
+  the article matches a highlight word the chip turns alarm-red and the M
+  flips to white (so the match is scannable at a glance).
+- **Smaller top-bar stream name**: the feed/folder name above the article
+  is GOTHIC_18_BOLD instead of ROBOTO_CONDENSED_21.
+- **Bugfix**: changing the highlight words while reading re-laid the
+  article heading with the wrong font (18-bold instead of 24) — the
+  heading jumped in size on every word change. The re-layout now uses the
+  same GOTHIC_24_BOLD as the fresh page build.
+
 ## 0.3.35
 
 - **Progress bar**: 1 px thicker (2 → 3 px) and the big position dot is gone —
