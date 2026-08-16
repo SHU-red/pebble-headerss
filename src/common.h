@@ -8,7 +8,7 @@
 // startup so a device log can prove which build is running (line numbers
 // shift between commits and were ambiguous). Update on every release.
 // ---------------------------------------------------------------------------
-#define BUILD_COMMIT "b8a6008"
+#define BUILD_COMMIT "905cf5d"
 
 // ---------------------------------------------------------------------------
 // Shared limits and wire types. These are the single source of truth for the
@@ -58,9 +58,8 @@ typedef struct {
 
 // ---------------------------------------------------------------------------
 // Smart-surface settings (watch sub-menu toggles). Declared here so any
-// translation unit can read them; implemented in storage.c. C->JS direction:
-// the values are also reported on RequestConfig (keys ImportantRow /
-// ProgressLine), the JS may ignore them.
+// translation unit can read them; implemented in storage.c. Watch-only:
+// they live in the sub-menu and persist on the watch.
 // ---------------------------------------------------------------------------
 
 bool setting_important(void); // Important row in the root menu — default ON

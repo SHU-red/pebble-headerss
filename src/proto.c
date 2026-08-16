@@ -242,8 +242,6 @@ void proto_reply_config(void) {
     dict_write_int32(iter, MESSAGE_KEY_AccentColor, (int32_t)s_accent.argb);
     dict_write_int32(iter, MESSAGE_KEY_DarkMode, s_dark ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_TouchEnabled, s_touch ? 1 : 0);
-    dict_write_int32(iter, MESSAGE_KEY_ImportantRow, setting_important() ? 1 : 0);
-    dict_write_int32(iter, MESSAGE_KEY_ProgressLine, setting_progress() ? 1 : 0);
     dict_write_end(iter);
     app_message_outbox_send();
   }

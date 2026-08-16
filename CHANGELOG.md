@@ -1,5 +1,19 @@
 # Changelog
 
+## Store release notes
+
+**HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
+articles full-screen, mark read, star favourites, highlight words.
+
+**v0.3.31**
+- Articles scroll smoothly on every watch (incl. Time 2); hold DOWN jumps
+  to the next article, hold UP goes back — long articles are a breeze
+- Full article text streamed on demand — nothing is ever shortened
+- Scrollbar progress bar with a flash on every article change
+- Dark & light themes + your accent color; word highlighting with an M
+  indicator; unread-only mode; auto-mark-read; per-feed mark-all-read and
+  refresh
+
 ## 0.3.31
 
 - **Progress bar: scrollbar thumb with a settle flash** — the 2 px line is
