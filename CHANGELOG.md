@@ -5,13 +5,14 @@
 **HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
 articles full-screen, mark read, star favourites, highlight words.
 
-**v0.3.33**
+**v0.3.37**
 - Read articles in full — nothing is ever cut off; long articles scroll
   smoothly on every watch
 - Hold UP/DOWN jumps between articles, tap scrolls page by page
+- Editorial reader: bold white headings with an accent feed·time line,
+  word highlighting in your accent color
 - Theme on the watch: one tap cycles System → Dark → Light
-- Accent color + word highlighting (M indicator), dark & light themes
-- Progress bar with a big position dot
+- Slim sidebar with clock, star, unread dot and match indicator
 - Star favourites, unread-only mode, auto-mark-read, per-feed
   mark-all-read
 - Highlight words survive reinstalls
