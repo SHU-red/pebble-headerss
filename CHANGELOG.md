@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.30
+
+- **Connection info removed**: the sub-menu entry and its whole chain are
+  gone — `proto_request_user_info`, the JS `userInfoFlow`/`getUserInfo`,
+  the `FetchUserInfo` wire key and the account dialog. The sub-menu now
+  lists 6 rows (Refresh / Mark all read / Auto mark read / Unread only /
+  Important row / Progress line).
+
 ## 0.3.29
 
 - **"HOLD DOWN" end hint redesigned**: the hint at the end of a long

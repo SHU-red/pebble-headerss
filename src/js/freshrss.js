@@ -621,67 +621,11 @@ function createClient(baseUrl, username, apiPass, opts) {
     });
   }
 
-  /**
-   * Account info for the Connection screen: parallel user-info +
-   * unread-count (max field), like getTree's parallel fetch. Returns
-   * {userName, userEmail, unread} with raw values ('' / 0 when absent).
-   */
-  function getUserInfo(cb) {
-    var infoUrl = base + API_BASE + '/reader/api/0/user-info?output=json';
-    var countsUrl = base + API_BASE + '/reader/api/0/unread-count?output=json';
-    var info = null;
-    var counts = null;
-    var firstErr = null;
-    var pending = 2;
-
-    function finish() {
-      pending -= 1;
-      if (pending > 0) {
-        return;
-      }
-      if (firstErr) {
-        cb(firstErr);
-        return;
-      }
-      cb(null, {
-        userName: info.userName || '',
-        userEmail: info.userEmail || '',
-        unread: counts.max || 0
-      });
-    }
-
-    request('GET', infoUrl, null, function (err, resp) {
-      if (err) {
-        firstErr = firstErr || err;
-      } else {
-        try {
-          info = JSON.parse(resp.text);
-        } catch (e) {
-          firstErr = firstErr || makeError(2, 'Bad user info');
-        }
-      }
-      finish();
-    });
-    request('GET', countsUrl, null, function (err, resp) {
-      if (err) {
-        firstErr = firstErr || err;
-      } else {
-        try {
-          counts = JSON.parse(resp.text);
-        } catch (e) {
-          firstErr = firstErr || makeError(2, 'Bad unread counts');
-        }
-      }
-      finish();
-    });
-  }
-
   return {
     ensureAuth: ensureAuth,
     getTree: getTree,
     getItems: getItems,
     getSummary: getSummary,
-    getUserInfo: getUserInfo,
     markRead: markRead,
     markUnread: markUnread,
     star: star,

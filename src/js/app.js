@@ -9,8 +9,8 @@
  *
  * Wire protocol (messageKeys in package.json):
  *   watch->phone: FetchTree | FetchItems(+ItemStream/ItemCont/FetchN) |
- *     FetchUserInfo | MarkRead (CSV ids) | StarItem(+StarOn) | MarkAllRead |
- *     RequestConfig | FetchSummary (article id) | MarkUnread (article id)
+ *     MarkRead (CSV ids) | StarItem(+StarOn) | MarkAllRead | RequestConfig |
+ *     FetchSummary (article id) | MarkUnread (article id)
  *   phone->watch: ResultCode/ResultText (0 = success), FeedCount + per-node
  *     FeedType/FeedId/FeedName/FeedUnread/FeedParent, ItemCount + per-item
  *     ItemId/ItemTitle/ItemFeed/ItemFeedId/ItemSummary/ItemTime/ItemRead/
@@ -681,31 +681,6 @@ function markAllReadFlow(stream) {
 }
 
 /**
- * Fetch account info for the Connection screen: parallel user-info +
- * unread-count, then report the multiline summary over ResultText.
- */
-function userInfoFlow() {
-  var client = makeClient();
-  if (!client) {
-    sendResult(1, 'Set server in phone settings');
-    return;
-  }
-  client.getUserInfo(function (err, data) {
-    if (err) {
-      sendResult(err.code, err.text);
-      return;
-    }
-    // Host = configured server URL with the protocol and any trailing
-    // slashes stripped (loadConfig already normalizes trailing slashes).
-    var host = String(loadConfig().serverUrl || '')
-      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
-      .replace(/\/+$/, '');
-    sendResult(0, 'Account: ' + data.userName + '\n' + data.userEmail +
-      '\nServer: ' + host + '\nUnread: ' + data.unread);
-  });
-}
-
-/**
  * Read a payload field by messageKey name, tolerating both the string-name
  * form (multi-JS) and the numeric-key form.
  * @param {Object} payload
@@ -821,13 +796,6 @@ Pebble.addEventListener('appmessage', function (e) {
   if (fetchTree !== undefined && fetchTree !== null && fetchTree !== 0) {
     console.log('appmessage: fetching tree');
     treeFlow();
-    return;
-  }
-
-  var fetchUserInfo = payloadValue(payload, 'FetchUserInfo');
-  if (fetchUserInfo !== undefined && fetchUserInfo !== null && fetchUserInfo !== 0) {
-    console.log('appmessage: fetching user info');
-    userInfoFlow();
     return;
   }
 

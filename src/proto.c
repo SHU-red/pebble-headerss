@@ -131,20 +131,6 @@ void proto_request_items(const char *stream, const char *cont) {
   }
 }
 
-//! Ask the phone for account info (Connection screen); the reply arrives as
-//! ResultCode/ResultText with a multiline "Account: ..." block.
-void proto_request_user_info(void) {
-  DictionaryIterator *iter;
-  AppMessageResult res = app_message_outbox_begin(&iter);
-  if (res == APP_MSG_OK) {
-    dict_write_int32(iter, MESSAGE_KEY_FetchUserInfo, 1);
-    res = app_message_outbox_send();
-  }
-  if (res != APP_MSG_OK) {
-    APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send FetchUserInfo (%d)", (int)res);
-  }
-}
-
 //! Toggle the star flag of one article on the server.
 void proto_star(const char *id, bool on) {
   DictionaryIterator *iter;

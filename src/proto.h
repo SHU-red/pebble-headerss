@@ -14,7 +14,6 @@ void proto_init(void);
 //! Watch -> phone senders.
 void proto_request_tree(void);
 void proto_request_items(const char *stream, const char *cont);
-void proto_request_user_info(void);
 void proto_star(const char *id, bool on);
 void proto_mark_all_read(const char *stream);
 void proto_reply_config(void);

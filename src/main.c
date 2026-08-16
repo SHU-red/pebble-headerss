@@ -268,8 +268,8 @@ static void dialog_show_final(bool success, const char *text) {
     return;
   }
   s_dialog_final = true;
-  // Multiline results (e.g. the Connection account block) get the smaller
-  // font so all lines fit the dialog's text area.
+  // Multiline results get the smaller font so all lines fit the dialog's
+  // text area.
   if (text && strchr(text, '\n')) {
     text_layer_set_font(s_dialog_text,
                         fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
@@ -340,8 +340,8 @@ static bool contains_ci(const char *hay, const char *needle) {
 void ui_result(int code, const char *text) {
   if (code == 0) {
     if (s_dialog_active) {
-      // Success: show the phone's ResultText when present (e.g. the
-      // multiline account block from FetchUserInfo), else the generic note.
+      // Success: show the phone's ResultText when present, else the
+      // generic note.
       dialog_show_final(true, (text && text[0]) ? text : "Done!");
     }
     return;
@@ -881,8 +881,8 @@ static void push_folder_window(const char *id, const char *name) {
 }
 
 // ---------------------------------------------------------------------------
-//! Sub-menu (UP from the root): Refresh / Mark all read / Connection / Auto
-//! mark read (opens the MarkMode selection window) / Unread only / the two
+//! Sub-menu (UP from the root): Refresh / Mark all read / Auto mark read
+//! (opens the MarkMode selection window) / Unread only / the two
 //! smart-surface toggles — flat, one submenu (the auto-mark window)
 // ---------------------------------------------------------------------------
 
@@ -892,7 +892,7 @@ static const char *const s_mark_mode_labels[MARK_MODE_COUNT] = MARK_MODE_LABELS;
 
 static uint16_t sub_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
                                  void *callback_context) {
-  return 7;
+  return 6;
 }
 
 static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
@@ -904,18 +904,15 @@ static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell
     menu_cell_basic_draw(ctx, cell_layer, "Mark all read",
                          "All articles in every feed", NULL);
   } else if (cell_index->row == 2) {
-    menu_cell_basic_draw(ctx, cell_layer, "Connection info",
-                         "Show the connected account", NULL);
-  } else if (cell_index->row == 3) {
     // Auto-mark mode: subtitle shows the current mode label.
     const char *mode = mark_mode() >= MARK_NEVER && mark_mode() < MARK_MODE_COUNT
                            ? s_mark_mode_labels[mark_mode()]
                            : "?";
     menu_cell_basic_draw(ctx, cell_layer, "Auto mark read", mode, NULL);
-  } else if (cell_index->row == 4) {
+  } else if (cell_index->row == 3) {
     menu_cell_basic_draw(ctx, cell_layer, "Unread only",
                          s_unread_only ? "ON" : "OFF", NULL);
-  } else if (cell_index->row == 5) {
+  } else if (cell_index->row == 4) {
     menu_cell_basic_draw(ctx, cell_layer, "Important row",
                          s_important ? "ON" : "OFF", NULL);
   } else {
@@ -934,18 +931,13 @@ static void sub_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
     s_confirm_markall = true;
     dialog_show_confirm_text("Mark all read?\n\nSELECT: confirm\nBACK: cancel");
   } else if (cell_index->row == 2) {
-    // Connection info: ask the phone for the account; the ResultText reply
-    // is shown in the dialog ("Account: ...\n...\nServer: ...\nUnread: ...").
-    dialog_show_working("Loading");
-    proto_request_user_info();
-  } else if (cell_index->row == 3) {
     push_mode_window();
-  } else if (cell_index->row == 4) {
+  } else if (cell_index->row == 3) {
     s_unread_only = !s_unread_only;
     storage_save_settings();
     vibes_short_pulse();
     menu_layer_reload_data(menu_layer);
-  } else if (cell_index->row == 5) {
+  } else if (cell_index->row == 4) {
     s_important = !s_important;
     storage_save_settings();
     vibes_short_pulse();
@@ -1205,8 +1197,7 @@ static void init(void) {
   // working dialog here: on a first run (or after a cache-format change)
   // the fetch races the dialog's push/pop against the menu render — that
   // interplay crashed at startup. The menu's empty state is the feedback;
-  // explicit user actions (Refresh, Connection, Mark all read) still use
-  // the dialog.
+  // explicit user actions (Refresh, Mark all read) still use the dialog.
   tree_load_cache();
   proto_request_tree();
 }
