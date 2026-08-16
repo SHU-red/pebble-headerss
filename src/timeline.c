@@ -19,6 +19,7 @@
 // ---------------------------------------------------------------------------
 
 #define PROGRESS_H 2      // accent progress line along the very top (y=0..2)
+#define PROGRESS_DOT_H 8  // position dot diameter (extends below the line)
 #define TOP_BAR_H 24      // black top bar with the stream name (starts y=2)
 #define DIVIDER_H 2       // accent divider line under the top bar (y=26..28)
 #define SIDEBAR_W 26      // thick accent sidebar holding the icons
@@ -283,13 +284,15 @@ static void format_reltime(char *buf, size_t len, int32_t published) {
 // ---------------------------------------------------------------------------
 
 //! 2 px progress line along the very top of the screen (y = 0..2), above
-//! the black top bar: a full-width muted TRACK with a 2 px-tall x 3 px-wide
-//! accent THUMB at the current article position (scrollbar style). The
-//! thumb flashes bright (theme_fg) for ~160 ms on every article change
+//! the black top bar: the read portion (left of the current position) is a
+//! full accent fill, the unread remainder stays the muted track, and a BIG
+//! accent dot marks the current article position (PROGRESS_DOT_H diameter,
+//! extending into the top bar so it is clearly visible). The dot flashes
+//! bright (theme_fg) for ~160 ms on every article change
 //! (progress_pulse_start). Gated by the progress setting. The denominator
 //! is the larger of the announced page size (s_page_announced, set by
 //! timeline_page_begin) and the actual loaded count, so with s_count == 1
-//! on entry the thumb starts near 0 (1/50 of the page) instead of 100%.
+//! on entry the dot starts near 0 (1/50 of the page) instead of 100%.
 static void progress_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   if (setting_progress() && s_count > 0) {
@@ -305,22 +308,27 @@ static void progress_update(Layer *layer, GContext *ctx) {
       if (w > max_w) {
         w = max_w;
       }
-      // The full-width track (read + unread remainder) in the muted color.
+      // The muted track (the unread remainder, untouched).
       graphics_context_set_fill_color(ctx, theme_muted());
-      graphics_fill_rect(ctx, GRect(0, 0, max_w, b.size.h), 0, GCornerNone);
-      // The thumb: its right edge marks the current position; kept inside
-      // the cap at the last article.
-      const int16_t TW = 3;
-      int16_t tx = w - TW;
-      if (tx < 0) {
-        tx = 0;
+      graphics_fill_rect(ctx, GRect(0, 0, max_w, PROGRESS_H), 0, GCornerNone);
+      // The read portion (left of the position) in the full accent.
+      if (w > 0) {
+        graphics_context_set_fill_color(ctx, s_accent);
+        graphics_fill_rect(ctx, GRect(0, 0, w, PROGRESS_H), 0, GCornerNone);
       }
-      if (tx > max_w - TW) {
-        tx = max_w - TW;
+      // The position dot: a big circle centered on the position, kept
+      // inside the sidebar cap at the last article.
+      int16_t cx = w;
+      if (cx < PROGRESS_DOT_H / 2) {
+        cx = PROGRESS_DOT_H / 2;
+      }
+      if (cx > max_w - PROGRESS_DOT_H / 2) {
+        cx = max_w - PROGRESS_DOT_H / 2;
       }
       graphics_context_set_fill_color(ctx,
                                       s_progress_pulse ? theme_fg() : s_accent);
-      graphics_fill_rect(ctx, GRect(tx, 0, TW, b.size.h), 0, GCornerNone);
+      graphics_fill_circle(ctx, GPoint(cx, PROGRESS_DOT_H / 2 + 1),
+                           PROGRESS_DOT_H / 2);
     }
   }
 }
@@ -1844,11 +1852,6 @@ static void timeline_window_load(Window *window) {
   s_pages[0].idx = -1;
   s_pages[1].idx = -1;
 
-  // 2 px accent progress line along the very top (y = 0..2), above the bar.
-  s_prog_line = layer_create(GRect(0, 0, s_win_w, PROGRESS_H));
-  layer_set_update_proc(s_prog_line, progress_update);
-  layer_add_child(root, s_prog_line);
-
   // Black top bar with the stream name in accent (y = 2..2 + TOP_BAR_H).
   s_top_bar = layer_create(GRect(0, PROGRESS_H, s_win_w, TOP_BAR_H));
   layer_set_update_proc(s_top_bar, top_bar_update);
@@ -1867,6 +1870,14 @@ static void timeline_window_load(Window *window) {
   text_layer_set_text_color(s_top_text, GColorWhite); // white on the black bar (both modes)
   text_layer_set_text(s_top_text, s_title);
   layer_add_child(root, text_layer_get_layer(s_top_text));
+
+  // Progress line + position dot along the very top (y = 0..2 line, the
+  // position dot extends into the top bar). Added AFTER the top bar so the
+  // dot draws over it; the sidebar is added later and the dot is capped
+  // before it.
+  s_prog_line = layer_create(GRect(0, 0, s_win_w, PROGRESS_H + PROGRESS_DOT_H));
+  layer_set_update_proc(s_prog_line, progress_update);
+  layer_add_child(root, s_prog_line);
 
   s_status = text_layer_create(bounds);
   text_layer_set_font(s_status, fonts_get_system_font(FONT_KEY_GOTHIC_18));

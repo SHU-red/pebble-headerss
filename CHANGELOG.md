@@ -14,6 +14,13 @@ articles full-screen, mark read, star favourites, highlight words.
   indicator; unread-only mode; auto-mark-read; per-feed mark-all-read and
   refresh
 
+## 0.3.32
+
+- **Progress bar: big position dot** — the current article position is now
+  a large accent dot (8 px, extending into the top bar) instead of the tiny
+  thumb; the read portion left of it is a full accent fill, the unread
+  remainder stays the muted track. The settle flash is unchanged.
+
 ## 0.3.31
 
 - **Progress bar: scrollbar thumb with a settle flash** — the 2 px line is
