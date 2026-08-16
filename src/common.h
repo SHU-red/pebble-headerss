@@ -45,7 +45,6 @@
 #define MARK_BATCH_MAX 12
 #define MARK_FLUSH_MS 500
 #define REQUEST_TIMEOUT_MS 12000
-#define TIMELINE_ROW_H 72
 
 //! Divide a 64-bit value by 1,000,000 without a 64-bit division libcall
 //! (the toolchain's __udivmoddi4 links in 754 B of .text). Binary long
@@ -110,15 +109,12 @@ bool setting_progress(void);  // Progress line on the timeline top bar — defau
 int highlight_word_count(void);
 //! Word i as a NUL-terminated string; "" when i is out of range.
 const char *highlight_word(int i);
-//! The normalized comma-separated word list ("" when none).
-const char *highlight_words_csv(void);
 
 // ---------------------------------------------------------------------------
 // Auto-mark read mode (0.3.0). Replaces the old MarkOnOpenList /
 // MarkOnOpenDetail watch toggles: one mode says how eagerly the reader marks
 // an opened article read. Persisted by storage.c (persist key 14); the
-// reader (timeline.c) polls mark_mode() and arms its dwell timer with
-// MARK_MODE_DELAY_MS[mode].
+// reader (timeline.c) polls mark_mode() and arms its dwell timer.
 // ---------------------------------------------------------------------------
 
 typedef enum {
@@ -134,9 +130,7 @@ typedef enum {
 #define MARK_MODE_COUNT 7
 //! Selection-window labels (main.c), indexed by MarkMode.
 #define MARK_MODE_LABELS { "Never", "Immediately", "1s", "2s", "3s", "5s", "10s" }
-//! Dwell delay before auto-marking read, indexed by MarkMode (0 = immediately;
-//! MARK_NEVER disables auto-marking entirely).
-#define MARK_MODE_DELAY_MS { 0, 0, 1000, 2000, 3000, 5000, 10000 }
+//! Dwell delays live in timeline.c (mark_delay_ms[]), indexed by MarkMode.
 
 //! Current auto-mark mode (default MARK_NOW); read by the timeline reader.
 int mark_mode(void);

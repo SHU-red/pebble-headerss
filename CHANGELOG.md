@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.27
+
+- **Light mode fully implemented**: audit of every colorized surface (menus,
+  dialogs, reader chrome, sidebar, badges, status) with the dark/light
+  toggle now live-repaints everything. The one real defect was the reader
+  divider (white-on-white in light mode) — it now renders dark gray there
+  and repaints on a theme change; every other surface was already
+  theme-driven or both-mode-readable by design (black top bar + accent
+  chrome stay, per design).
+- **README screenshots**: feed tree, sub-menu, article and highlight-match
+  captures added.
+- **Cleanup**: dead `highlight_words_csv()` removed (12 B of binary),
+  unused `MARK_MODE_DELAY_MS`/`TIMELINE_ROW_H` macros dropped, retired
+  `MarkOnOpenList`/`MarkOnOpenDetail` messageKeys removed, dead JS `login`
+  export dropped, stale "140-char preview" comments corrected to 80.
+
 ## 0.3.26
 
 - **Long articles must be left with a HOLD** (new): one fast tap at the end

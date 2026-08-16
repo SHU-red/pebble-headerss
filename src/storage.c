@@ -248,10 +248,6 @@ const char *highlight_word(int i) {
   return (i >= 0 && i < s_hl_count) ? s_hl_words[i] : "";
 }
 
-const char *highlight_words_csv(void) {
-  return s_hl_csv;
-}
-
 //! Persist a new list (Clay -> watch) and re-parse it in place.
 void storage_highlight_set_words(const char *csv) {
   hl_parse(csv ? csv : "");

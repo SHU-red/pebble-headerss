@@ -695,7 +695,6 @@ function createClient(baseUrl, username, apiPass, opts) {
   }
 
   return {
-    login: login,
     ensureAuth: ensureAuth,
     getTree: getTree,
     getItems: getItems,

@@ -317,11 +317,12 @@ static void top_bar_update(Layer *layer, GContext *ctx) {
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 }
 
-//! Thin white divider between the top bar and the scrollable page (matches
-//! the menu group dividers).
+//! Thin divider between the top bar and the scrollable page: white in dark
+//! mode (a visible seam under the black bar over the black page), dark gray
+//! in light mode — a white line would vanish against the white page.
 static void divider_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, s_dark ? GColorWhite : GColorDarkGray);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 }
 
@@ -913,7 +914,7 @@ static int body_page_idx(Layer *body) {
 //! (base words in theme_fg, highlighted words in the alarm color + bold +
 //! underline). When the assembled full summary of the page's article is
 //! complete, the runs (rebuilt from the heap buffer) draw from it instead of
-//! the 140-char preview; while a fetch is in flight a subtle muted hint
+//! the 80-char preview; while a fetch is in flight a subtle muted hint
 //! trails the text.
 static void body_update(Layer *layer, GContext *ctx) {
   int pi = body_page_idx(layer);
@@ -1109,7 +1110,7 @@ static void full_summary_hint_update(void) {
 }
 
 //! An article settled under the reader: ask the phone for its full summary.
-//! The 140-char preview stays in the body until the chunks assemble; the
+//! The 80-char preview stays in the body until the chunks assemble; the
 //! fetch is skipped when the preview already is the full summary.
 static void full_summary_request(int32_t idx) {
   full_summary_reset(); // new fetch start: free the previous buffer
@@ -1156,7 +1157,7 @@ static void full_summary_apply(void) {
 }
 
 //! The full-summary text under the current page was thrown away (stale-race
-//! self-heal): put the 140-char preview layout back.
+//! self-heal): put the 80-char preview layout back.
 static void full_summary_revert_to_preview(void) {
   if (s_count == 0 || s_idx < 0 || s_idx >= s_count) {
     return;
@@ -1815,7 +1816,7 @@ static void timeline_window_load(Window *window) {
   layer_set_update_proc(s_top_bar, top_bar_update);
   layer_add_child(root, s_top_bar);
 
-  // Thin accent divider line between the top bar and the scrollable page.
+  // Thin theme divider line between the top bar and the scrollable page.
   s_divider = layer_create(GRect(0, TOP_BAR_H + PROGRESS_H, s_win_w, DIVIDER_H));
   layer_set_update_proc(s_divider, divider_update);
   layer_add_child(root, s_divider);
@@ -1825,7 +1826,7 @@ static void timeline_window_load(Window *window) {
   text_layer_set_text_alignment(s_top_text, GTextAlignmentLeft);
   text_layer_set_overflow_mode(s_top_text, GTextOverflowModeTrailingEllipsis);
   text_layer_set_background_color(s_top_text, GColorClear);
-  text_layer_set_text_color(s_top_text, GColorWhite); // matches the divider
+  text_layer_set_text_color(s_top_text, GColorWhite); // white on the black bar (both modes)
   text_layer_set_text(s_top_text, s_title);
   layer_add_child(root, text_layer_get_layer(s_top_text));
 
@@ -2265,10 +2266,13 @@ void timeline_apply_settings(void) {
     layer_mark_dirty(s_status_check); // accent check
   }
   if (s_top_text) {
-    text_layer_set_text_color(s_top_text, GColorWhite); // matches the divider
+    text_layer_set_text_color(s_top_text, GColorWhite); // white on the black bar (both modes)
   }
   if (s_top_bar) {
     layer_mark_dirty(s_top_bar);
+  }
+  if (s_divider) {
+    layer_mark_dirty(s_divider); // theme divider color
   }
   if (s_prog_line) {
     layer_mark_dirty(s_prog_line); // accent progress line
@@ -2312,7 +2316,7 @@ void timeline_highlight_words_changed(void) {
       .width = text_w, .max_lines = 0, .out = &p->head_layout,
     });
     // The body text depends on the full-summary state: the heap buffer when
-    // the article's full text is complete, else the 140-char preview.
+    // the article's full text is complete, else the 80-char preview.
     const char *body_text = a->summary;
     if (s_full_done && s_full_summary && p->idx == s_full_idx) {
       body_text = s_full_summary;

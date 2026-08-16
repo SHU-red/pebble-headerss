@@ -61,6 +61,13 @@ sidebar (read/unread dot + star).
 - **Lean** — bounded article window in RAM (68 on the Time 2, 56 on the
   64 KB class), live-only data, tree cached in flash for instant start
 
+## Screenshots
+
+| | | |
+|---|---|---|
+| ![Feed tree](resources/store/menu.png) | ![Sub-menu](resources/store/menu_2.png) | |
+| ![Article](resources/store/article.png) | ![Highlight matches](resources/store/article_match.png) | |
+
 ## API
 
 100% FreshRSS-compatible via the **GReader API** (`/api/greader.php`):

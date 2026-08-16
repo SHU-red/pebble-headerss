@@ -4,8 +4,8 @@
  * Built with @rebble/clay. Watch-bound messageKeys (AccentColor, DarkMode,
  * TouchEnabled, HighlightWords) match entries of the "messageKeys" array in
  * package.json so Clay sends their values to the watch on save. The reading
- * options (MarkOnOpenList/MarkOnOpenDetail) live on the WATCH in the
- * sub-menu (toggle rows) and are not part of this page. The connection
+ * options (auto-mark mode, unread-only, smart-surface toggles) live on the
+ * WATCH in the sub-menu and are not part of this page. The connection
  * fields (ServerUrl, User, ApiPass) are phone-side only: Clay persists them
  * in 'clay-settings' for prefill and the JS keeps a working copy in
  * localStorage; they never round-trip to the watch.

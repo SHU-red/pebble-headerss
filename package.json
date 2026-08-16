@@ -62,8 +62,6 @@
       "AccentColor",
       "DarkMode",
       "TouchEnabled",
-      "MarkOnOpenList",
-      "MarkOnOpenDetail",
       "UnreadOnly",
       "FetchUserInfo",
       "FeedNewest",
