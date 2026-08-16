@@ -27,7 +27,7 @@ void tree_reset(void) {
 
 //! Append one node (bounds-checked; silently drops overflows).
 void tree_add_node(int32_t kind, const char *id, const char *name,
-                   int32_t unread, const char *parent, int64_t newest) {
+                   int32_t unread, const char *parent) {
   if (s_node_count >= MAX_FEED_NODES) {
     return;
   }
@@ -43,7 +43,6 @@ void tree_add_node(int32_t kind, const char *id, const char *name,
   n->parent[sizeof(n->parent) - 1] = '\0';
   n->kind = (uint8_t)(kind < 0 ? 0 : (kind > 2 ? 2 : kind));
   n->unread = unread;
-  n->newest = newest;
 }
 
 // ---------------------------------------------------------------------------
@@ -62,8 +61,8 @@ void tree_begin_collect(int32_t count) {
 }
 
 void tree_collect_node(int32_t kind, const char *id, const char *name,
-                       int32_t unread, const char *parent, int64_t newest) {
-  tree_add_node(kind, id, name, unread, parent, newest);
+                       int32_t unread, const char *parent) {
+  tree_add_node(kind, id, name, unread, parent);
   s_collected++;
   if (s_collected >= s_collect_expected) {
     tree_fetch_done();
@@ -311,7 +310,7 @@ static int sort_rank(const FeedNode *n) {
 
 //! Compare two nodes for the stable menu sort. Specials and folders keep
 //! their (stable) arrival order; feeds sort within their parent group by
-//! newest desc, unread desc, title asc.
+//! unread desc, title asc.
 static int node_sort_cmp(const FeedNode *a, const FeedNode *b) {
   int ra = sort_rank(a);
   int rb = sort_rank(b);
@@ -324,9 +323,6 @@ static int node_sort_cmp(const FeedNode *a, const FeedNode *b) {
   int p = strcmp(a->parent, b->parent); // keep each folder's feeds together
   if (p != 0) {
     return p;
-  }
-  if (a->newest != b->newest) {
-    return a->newest > b->newest ? -1 : 1; // newest desc
   }
   if (a->unread != b->unread) {
     return a->unread > b->unread ? -1 : 1; // unread desc

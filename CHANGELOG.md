@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.28
+
+- **NEW-dot removed**: the "newer than your last visit" marker is gone —
+  the per-feed last-seen table, the FeedNewest wire key and the toggle were
+  removed cleanly (feeds are still sorted by newest activity).
+- **No automatic un-star**: advancing inside Starred never un-stars an
+  article anymore. Un-starring happens only when you explicitly hold SELECT
+  on an article, and the Starred badge updates then. The Triage-drain
+  setting is removed.
+- **README**: screenshots now sit inline under their feature descriptions
+  (feed tree, article, highlight matches, sub-menu) instead of a table.
+
 ## 0.3.27
 
 - **Light mode fully implemented**: audit of every colorized surface (menus,

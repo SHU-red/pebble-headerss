@@ -12,8 +12,7 @@
  *     FetchUserInfo | MarkRead (CSV ids) | StarItem(+StarOn) | MarkAllRead |
  *     RequestConfig | FetchSummary (article id) | MarkUnread (article id)
  *   phone->watch: ResultCode/ResultText (0 = success), FeedCount + per-node
- *     FeedType/FeedId/FeedName/FeedUnread/FeedNewest/FeedParent, ItemCount
- *     (+FeedNewest = newest article timestampUsec of the page) + per-item
+ *     FeedType/FeedId/FeedName/FeedUnread/FeedParent, ItemCount + per-item
  *     ItemId/ItemTitle/ItemFeed/ItemFeedId/ItemSummary/ItemTime/ItemRead/
  *     ItemStar, ItemCont (page continuation), FullSummary (<=3000-char
  *     chunk) + SummaryLast (1 = final chunk, also sent alone on error to
@@ -261,7 +260,6 @@ function sendTreeNode(nodes, index, generation) {
   dict.FeedId = node.id;
   dict.FeedName = node.name;
   dict.FeedUnread = node.unread;
-  dict.FeedNewest = node.newest;
   dict.FeedParent = node.parent;
   Pebble.sendAppMessage(dict, function () {
     sendTreeNode(nodes, index + 1, generation);
@@ -316,29 +314,26 @@ function itemsFlow(stream, cont, n, unreadOnly) {
         sendResult(err.code, err.text);
         return;
       }
-      sendItems(data.items, data.newest, data.continuation, generation);
+      sendItems(data.items, data.continuation, generation);
     });
   });
 }
 
 /**
- * Send one item page: {ItemCount: n, FeedNewest: newest} first, then one
- * item per message, chained through the ack callback, then
- * {ItemCont: continuation} so the watch knows the page is complete.
+ * Send one item page: {ItemCount: n} first, then one item per message,
+ * chained through the ack callback, then {ItemCont: continuation} so the
+ * watch knows the page is complete.
  * @param {Array<Object>} items
- * @param {string} newest - timestampUsec of the newest article in the page
- *   (decimal µs string; '0' when the page has no items)
  * @param {string} continuation
  * @param {number} generation - items generation; a stale chain aborts
  */
-function sendItems(items, newest, continuation, generation, retries) {
+function sendItems(items, continuation, generation, retries) {
   retries = retries || 0;
   if (generation !== itemsGeneration) {
     return;
   }
   var dict = {};
   dict.ItemCount = items.length;
-  dict.FeedNewest = newest || '0';
   Pebble.sendAppMessage(dict, function () {
     sendItemChain(items, 0, continuation, generation);
   }, function (err) {
@@ -348,7 +343,7 @@ function sendItems(items, newest, continuation, generation, retries) {
       console.log('items: failed to send ItemCount, retrying');
       setTimeout(function () {
         if (generation === itemsGeneration) {
-          sendItems(items, newest, continuation, generation, retries + 1);
+          sendItems(items, continuation, generation, retries + 1);
         }
       }, 250);
     } else {

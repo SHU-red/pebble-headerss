@@ -7,9 +7,8 @@
 #include "timeline.h"
 #include "common.h"
 
-// Shallow stack helpers (defined at the bottom): used by proto_handle_inbox,
+// Shallow stack helper (defined at the bottom): used by proto_handle_inbox,
 // which must avoid deep libc frames (strtoll/vfprintf) on the 2 KB stack.
-static int64_t parse_decimal(const char *s);
 static void copy_str(char *dst, size_t cap, const char *src);
 
 // ---------------------------------------------------------------------------
@@ -25,10 +24,6 @@ static void copy_str(char *dst, size_t cap, const char *src);
 static char s_mark_ids[MARK_BATCH_MAX][24];
 static uint8_t s_mark_count;
 static AppTimer *s_mark_timer;
-
-//! Stream the watch last asked for; an incoming ItemCount + FeedNewest
-//! updates that stream's last-seen (NEW-dot support).
-static char s_fetch_stream[48];
 
 // Full-summary request retry state (outbox-busy handling).
 static AppTimer *s_summary_retry_timer;
@@ -121,9 +116,6 @@ void proto_request_tree(void) {
 
 //! Request one page of a stream; cont "" asks for the first page.
 void proto_request_items(const char *stream, const char *cont) {
-  if (stream && stream[0]) {
-    copy_str(s_fetch_stream, sizeof(s_fetch_stream), stream);
-  }
   DictionaryIterator *iter;
   AppMessageResult res = app_message_outbox_begin(&iter);
   if (res == APP_MSG_OK) {
@@ -265,8 +257,6 @@ void proto_reply_config(void) {
     dict_write_int32(iter, MESSAGE_KEY_DarkMode, s_dark ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_TouchEnabled, s_touch ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_ImportantRow, setting_important() ? 1 : 0);
-    dict_write_int32(iter, MESSAGE_KEY_TriageDrain, setting_triage() ? 1 : 0);
-    dict_write_int32(iter, MESSAGE_KEY_NewDot, setting_newdot() ? 1 : 0);
     dict_write_int32(iter, MESSAGE_KEY_ProgressLine, setting_progress() ? 1 : 0);
     dict_write_end(iter);
     app_message_outbox_send();
@@ -306,7 +296,6 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     const char *id = "", *name = "", *parent = "";
     int32_t kind = t->value->int32;
     int32_t unread = 0;
-    int64_t newest = 0;
     if ((t = dict_find(iter, MESSAGE_KEY_FeedId))) {
       id = t->value->cstring;
     }
@@ -316,30 +305,16 @@ void proto_handle_inbox(DictionaryIterator *iter) {
     if ((t = dict_find(iter, MESSAGE_KEY_FeedUnread))) {
       unread = t->value->int32;
     }
-    if ((t = dict_find(iter, MESSAGE_KEY_FeedNewest))) {
-      // Decimal microseconds string; 0/absent when the feed has no items.
-      newest = parse_decimal(t->value->cstring);
-    }
     if ((t = dict_find(iter, MESSAGE_KEY_FeedParent))) {
       parent = t->value->cstring;
     }
-    tree_collect_node(kind, id, name, unread, parent, newest);
+    tree_collect_node(kind, id, name, unread, parent);
     return;
   }
 
-  // Item page: ItemCount announces the page (carrying FeedNewest, the newest
-  // article timestampUsec of the page), then one message per article
+  // Item page: ItemCount announces the page, then one message per article
   // (ItemTitle present), then a final ItemCont with the next continuation.
   if ((t = dict_find(iter, MESSAGE_KEY_ItemCount))) {
-    // Opening a stream stores its last-seen: seconds = FeedNewest / 1000000.
-    // The NEW-dot then compares the tree's per-feed newest against this.
-    Tuple *newest_t = dict_find(iter, MESSAGE_KEY_FeedNewest);
-    if (newest_t) {
-      int64_t usec = parse_decimal(newest_t->value->cstring);
-      if (usec > 0) {
-        storage_feed_set_last_seen(s_fetch_stream, div_million(usec));
-      }
-    }
     timeline_page_begin(t->value->int32);
     return;
   }
@@ -416,31 +391,6 @@ void proto_handle_inbox(DictionaryIterator *iter) {
   }
 
   APP_LOG(APP_LOG_LEVEL_INFO, "Unrecognized AppMessage payload");
-}
-
-//! Bounded decimal parse for the FeedNewest microseconds string. Deliberately
-//! NOT libc strtoll: newlib's strtoll/_strtoll_l have deep stack frames, and
-//! the app stack is only 2 KB on basalt-class platforms — the parse runs
-//! inside the AppMessage inbox callback, whose chain already overflows.
-static int64_t parse_decimal(const char *s) {
-  if (!s) {
-    return 0;
-  }
-  int64_t v = 0;
-  bool neg = false;
-  if (*s == '-') {
-    neg = true;
-    s++;
-  }
-  while (*s >= '0' && *s <= '9') {
-    int64_t nv = v * 10 + (*s - '0');
-    if (nv < v) {
-      return neg ? INT64_MIN : INT64_MAX; // clamp on overflow
-    }
-    v = nv;
-    s++;
-  }
-  return neg ? -v : v;
 }
 
 //! Bounded string copy with forced NUL. Replaces snprintf("%s") in the

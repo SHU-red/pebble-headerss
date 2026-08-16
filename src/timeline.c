@@ -1434,10 +1434,8 @@ static void transition_watchdog_cancel(void) {
 }
 
 //! Transition finished: the target page is fully on screen. Commit the new
-//! index, drain the triage stream (unstar the article we landed on when
-//! advancing inside Starred), drop the old page, release the locks, then
-//! arm the auto-mark timer and fetch the full summary for the settled
-//! article.
+//! index, drop the old page, release the locks, then arm the auto-mark
+//! timer and fetch the full summary for the settled article.
 static void transition_finalize(void) {
   transition_watchdog_cancel();
   s_idx = s_target_idx;
@@ -1447,15 +1445,6 @@ static void transition_finalize(void) {
   s_cur = 1 - s_cur;
   s_advancing = false;
   s_advance_guard = false;
-  if (s_dir > 0 && setting_triage() &&
-      strcmp(s_stream, "user/-/state/com.google/starred") == 0) {
-    if (s_idx >= 0 && s_idx < s_count) {
-      Article *a = &s_articles[s_idx];
-      a->star = 0;
-      proto_star(a->id, 0);
-      tree_starred_adjust(-1); // drained: the Starred badge follows
-    }
-  }
   mark_timer_start(s_idx);
   full_summary_request(s_idx);
   full_summary_apply(); // heal: apply a completed fetch if the chunk path missed it

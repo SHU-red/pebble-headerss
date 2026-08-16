@@ -14,10 +14,12 @@ sidebar (read/unread dot + star).
 ## Features
 
 - **Feed tree** — All unread / Starred / **Important** (FreshRSS priority
-  feeds) streams, nested folders with unread badges; **NEW-dots** on feeds
-  with articles newer than your last visit, feeds sorted by newest activity;
-  open a folder to play **all articles recursively** or dive into a single
-  feed
+  feeds) streams, nested folders with unread badges, feeds sorted by newest
+  activity; open a folder to play **all articles recursively** or dive into
+  a single feed
+
+  ![Feed tree](resources/store/menu.png)
+
 - **Timeline reading view** — one article full screen: 2 px accent progress
   line at the very top, black top bar with the stream name in accent, accent
   heading bar with the FULL article heading (multi-line, never truncated)
@@ -28,6 +30,8 @@ sidebar (read/unread dot + star).
   to previously read articles; a full-height accent sidebar holds three
   always-visible icons: eye (white = unread, black = read), star
   (yellow = favourited), M (lights up when highlight words match)
+
+  ![Article](resources/store/article.png)
 - **Read through** — opening a stream shows the first article full screen;
   scroll to the bottom (or press DOWN) to advance, scroll up past the top to
   go back; **SELECT toggles read/unread** (and cancels the auto-mark timer),
@@ -42,39 +46,36 @@ sidebar (read/unread dot + star).
   underlined in the heading (whole words, case-insensitive, hyphens count
   as boundaries); updates live while reading; the sidebar's M lights up on
   articles with matches
+
+  ![Highlight matches](resources/store/article_match.png)
+
 - **Per-feed actions** — long-press SELECT on a feed row: **Mark all read**
   (with confirm) or **Refresh** (re-fetch and open at the newest)
-- **Triage drain** — optional (sub-menu): inside Starred, advancing past an
-  article un-stars it — star = keep, reading drains the list
 - **Modern look** — dark theme by default, accent color everywhere: black
   top strip with accent dots on the root menu, permanent accent right spine
   in every menu, unread counts as filled accent pills, accent-selected rows;
   reader = 2 px accent progress line at the very top, black top bar with
   accent stream name, always-accent heading with black text, full-height
-  icon sidebar (eye / star / M)
+  icon sidebar (eye / star / M); light theme selectable from the phone
+  settings
 - **Settings** — UP on the top black strip opens the watch sub-menu:
   Refresh, Mark all read, Connection info (account + unread), **Auto mark
   read** (Never / Immediately / 1s / 2s / 3s / 5s / 10s), Unread only,
-  Important row / NEW-dot / Progress line / Triage drain toggles; the
-  connection/appearance page lives in the phone app settings (Clay):
-  FreshRSS URL, username, API password, theme
+  Important row / Progress line toggles; the connection/appearance page
+  lives in the phone app settings (Clay): FreshRSS URL, username, API
+  password, theme
+
+  ![Sub-menu](resources/store/menu_2.png)
+
 - **Lean** — bounded article window in RAM (68 on the Time 2, 56 on the
   64 KB class), live-only data, tree cached in flash for instant start
-
-## Screenshots
-
-| | | |
-|---|---|---|
-| ![Feed tree](resources/store/menu.png) | ![Sub-menu](resources/store/menu_2.png) | |
-| ![Article](resources/store/article.png) | ![Highlight matches](resources/store/article_match.png) | |
 
 ## API
 
 100% FreshRSS-compatible via the **GReader API** (`/api/greader.php`):
 ClientLogin auth (per-user **API password**, not the login password),
-subscription list, unread counts (per-feed newest timestamps for NEW-dots),
-continuation-paginated streams, edit-tag mark-read/star, mark-all-as-read,
-user-info.
+subscription list, unread counts, continuation-paginated streams, edit-tag
+mark-read/star, mark-all-as-read, user-info.
 
 ## Setup
 

@@ -8,7 +8,7 @@
 // startup so a device log can prove which build is running (line numbers
 // shift between commits and were ambiguous). Update on every release.
 // ---------------------------------------------------------------------------
-#define BUILD_COMMIT "2ad22d1"
+#define BUILD_COMMIT "1f9ae0c"
 
 // ---------------------------------------------------------------------------
 // Shared limits and wire types. These are the single source of truth for the
@@ -46,31 +46,6 @@
 #define MARK_FLUSH_MS 500
 #define REQUEST_TIMEOUT_MS 12000
 
-//! Divide a 64-bit value by 1,000,000 without a 64-bit division libcall
-//! (the toolchain's __udivmoddi4 links in 754 B of .text). Binary long
-//! division: the running remainder stays < 2e6, so it fits a uint32 and all
-//! per-step arithmetic is 32-bit; the quotient (always < 2^62 for int64
-//! magnitudes) is built as int64. Negative input is negated first (unsigned
-//! negation, well-defined even for INT64_MIN).
-static inline int64_t div_million(int64_t v) {
-  const int neg = v < 0;
-  uint64_t u = (uint64_t)v; // two's-complement bit pattern
-  if (neg) {
-    u = 0u - u; // magnitude (bit 63 set only for INT64_MIN)
-  }
-  uint64_t q = 0;
-  uint32_t r = 0; // remainder mod 1e6, always < 2e6
-  for (int b = 63; b >= 0; b--) {
-    r = (r << 1) | (uint32_t)((u >> b) & 1u);
-    q <<= 1;
-    if (r >= 1000000u) {
-      r -= 1000000u;
-      q |= 1u;
-    }
-  }
-  return neg ? -(int64_t)q : (int64_t)q;
-}
-
 //! One node of the feed tree as streamed by the phone.
 //! kind: 0 special (reading-list / starred), 1 folder, 2 feed.
 typedef struct {
@@ -79,19 +54,16 @@ typedef struct {
   char parent[48]; // parent folder's id, "" = root
   uint8_t kind;
   int32_t unread;
-  int64_t newest;  // FeedNewest (decimal microseconds) from the phone; 0 if absent
 } FeedNode;
 
 // ---------------------------------------------------------------------------
 // Smart-surface settings (watch sub-menu toggles). Declared here so any
 // translation unit can read them; implemented in storage.c. C->JS direction:
 // the values are also reported on RequestConfig (keys ImportantRow /
-// TriageDrain / NewDot / ProgressLine), the JS may ignore them.
+// ProgressLine), the JS may ignore them.
 // ---------------------------------------------------------------------------
 
 bool setting_important(void); // Important row in the root menu — default ON
-bool setting_triage(void);    // Triage drain (auto-unstar from Starred) — default OFF
-bool setting_newdot(void);    // NEW-dot on feeds with unseen items — default ON
 bool setting_progress(void);  // Progress line on the timeline top bar — default ON
 
 // ---------------------------------------------------------------------------

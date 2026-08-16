@@ -497,7 +497,7 @@ static int16_t badge_width(int32_t unread) {
 
 //! Right-aligned unread badge as a filled accent pill (black count); on the
 //! accent selection row the pill inverts (black pill, white count). `shift`
-//! moves it left to make room for the NEW-dot marker.
+//! moves it left when another element needs the badge's space.
 static void draw_badge(GContext *ctx, GRect b, int32_t unread, bool selected,
                        int16_t shift) {
   int16_t pw = badge_width(unread);
@@ -511,35 +511,6 @@ static void draw_badge(GContext *ctx, GRect b, int32_t unread, bool selected,
   graphics_fill_rect(ctx, pill, 8, GCornersAll);
   graphics_context_set_text_color(ctx, selected ? GColorWhite : GColorBlack);
   graphics_draw_text(ctx, num, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                     GRect(pill.origin.x, pill.origin.y - 1, pill.size.w, pill.size.h),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
-
-//! NEW-dot: a feed row with unread > 0 whose tree newest (seconds) is newer
-//! than the stored last-seen for that feed shows an accent "NEW" pill.
-#define NEW_PILL_W 36 // "NEW" marker pill width
-
-static bool new_pill_active(const FeedNode *node) {
-  if (!setting_newdot() || !node || node->kind != 2 || node->unread <= 0) {
-    return false;
-  }
-  int64_t newest_s = div_million(node->newest);
-  return newest_s > storage_feed_last_seen(node->id);
-}
-
-//! Small accent "NEW" pill, left of the unread badge, same style as the
-//! badge (inverts on the selected row). `shift` = badge width + gap.
-static void draw_new_pill(GContext *ctx, GRect b, bool selected,
-                          const FeedNode *node, int16_t shift) {
-  if (!new_pill_active(node)) {
-    return;
-  }
-  GRect pill = GRect(b.size.w - 12 - NEW_PILL_W - shift,
-                     (b.size.h - 16) / 2, NEW_PILL_W, 16);
-  graphics_context_set_fill_color(ctx, selected ? GColorBlack : s_accent);
-  graphics_fill_rect(ctx, pill, 8, GCornersAll);
-  graphics_context_set_text_color(ctx, selected ? GColorWhite : GColorBlack);
-  graphics_draw_text(ctx, "NEW", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
                      GRect(pill.origin.x, pill.origin.y - 1, pill.size.w, pill.size.h),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
@@ -629,16 +600,14 @@ static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
   if (node) {
     label = node->name[0] ? node->name : node->id;
   }
-  bool np = node && new_pill_active(node);
   graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_fg());
   graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
                      GRect(text_x, (b.size.h - 22) / 2,
-                           b.size.w - text_x - 38 - (np ? NEW_PILL_W + 4 : 0), 22),
+                           b.size.w - text_x - 38, 22),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
   if (node) {
-    draw_new_pill(ctx, b, selected, node, badge_width(node->unread) + 4);
-    draw_badge(ctx, b, node->unread, selected, np ? NEW_PILL_W + 4 : 0);
+    draw_badge(ctx, b, node->unread, selected, 0);
   }
 
   // Group dividers: below "All unread" and below the Important row (the
@@ -822,17 +791,13 @@ static void folder_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
                                  selected ? GColorBlack : theme_fg(),
                                  selected ? s_accent : theme_bg());
 
-  bool np = node && new_pill_active(node);
   graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_fg());
   graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
                      GRect(text_x, (b.size.h - 22) / 2,
-                           b.size.w - text_x - 38 - (np ? NEW_PILL_W + 4 : 0), 22),
+                           b.size.w - text_x - 38, 22),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
-  if (node) {
-    draw_new_pill(ctx, b, selected, node, badge_width(node->unread) + 4);
-  }
-  draw_badge(ctx, b, unread, selected, np ? NEW_PILL_W + 4 : 0);
+  draw_badge(ctx, b, unread, selected, 0);
 
   // Group divider below "All articles" (the folder/feed rows start after).
   if (cell_index->row == 0) {
@@ -916,9 +881,9 @@ static void push_folder_window(const char *id, const char *name) {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-menu (UP from the root): Refresh / Mark all read / Connection / Auto
-// mark read (opens the MarkMode selection window) / Unread only / the four
-// smart-surface toggles — flat, one submenu (the auto-mark window)
+//! Sub-menu (UP from the root): Refresh / Mark all read / Connection / Auto
+//! mark read (opens the MarkMode selection window) / Unread only / the two
+//! smart-surface toggles — flat, one submenu (the auto-mark window)
 // ---------------------------------------------------------------------------
 
 //! Mode labels for the "Auto mark read" row subtitle and the selection
@@ -927,7 +892,7 @@ static const char *const s_mark_mode_labels[MARK_MODE_COUNT] = MARK_MODE_LABELS;
 
 static uint16_t sub_get_num_rows(MenuLayer *menu_layer, uint16_t section_index,
                                  void *callback_context) {
-  return 9;
+  return 7;
 }
 
 static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
@@ -953,15 +918,9 @@ static void sub_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell
   } else if (cell_index->row == 5) {
     menu_cell_basic_draw(ctx, cell_layer, "Important row",
                          s_important ? "ON" : "OFF", NULL);
-  } else if (cell_index->row == 6) {
-    menu_cell_basic_draw(ctx, cell_layer, "NEW-dot",
-                         s_newdot ? "ON" : "OFF", NULL);
-  } else if (cell_index->row == 7) {
+  } else {
     menu_cell_basic_draw(ctx, cell_layer, "Progress line",
                          s_progress ? "ON" : "OFF", NULL);
-  } else {
-    menu_cell_basic_draw(ctx, cell_layer, "Triage drain",
-                         s_triage ? "ON" : "OFF", NULL);
   }
 }
 
@@ -991,18 +950,8 @@ static void sub_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
     storage_save_settings();
     vibes_short_pulse();
     menu_layer_reload_data(menu_layer);
-  } else if (cell_index->row == 6) {
-    s_newdot = !s_newdot;
-    storage_save_settings();
-    vibes_short_pulse();
-    menu_layer_reload_data(menu_layer);
-  } else if (cell_index->row == 7) {
-    s_progress = !s_progress;
-    storage_save_settings();
-    vibes_short_pulse();
-    menu_layer_reload_data(menu_layer);
   } else {
-    s_triage = !s_triage;
+    s_progress = !s_progress;
     storage_save_settings();
     vibes_short_pulse();
     menu_layer_reload_data(menu_layer);

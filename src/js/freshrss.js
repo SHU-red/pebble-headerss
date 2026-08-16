@@ -288,12 +288,10 @@ function createClient(baseUrl, username, apiPass, opts) {
 
   /**
    * Feed tree: parallel subscription/list + unread-count, merged into an
-   * ordered node list {type, id, name, unread, newest, parent}:
+   * ordered node list {type, id, name, unread, parent}:
    *   specials first, then folders (depth asc, then name), then feeds
    *   (grouped by parent, alphabetical). Folder nodes always precede the
-   *   feeds/folders that reference them. `newest` is the per-feed
-   *   newestItemTimestampUsec (decimal µs string; '0' when absent) so the
-   *   watch can show a NEW-dot per feed.
+   *   feeds/folders that reference them.
    */
   function getTree(cb) {
     var subsUrl = base + API_BASE + '/reader/api/0/subscription/list?output=json';
@@ -360,14 +358,12 @@ function createClient(baseUrl, username, apiPass, opts) {
 
   function mergeTree(subsResp, countsResp, starredCount) {
     var countsMap = {};
-    var newestMap = {};
     var unreadCounts = countsResp && countsResp.unreadcounts;
     if (unreadCounts) {
       for (var i = 0; i < unreadCounts.length; i++) {
         var uc = unreadCounts[i];
         if (uc && uc.id) {
           countsMap[uc.id] = uc.count || 0;
-          newestMap[uc.id] = String(uc.newestItemTimestampUsec || '0');
         }
       }
     }
@@ -381,7 +377,6 @@ function createClient(baseUrl, username, apiPass, opts) {
       id: READING_LIST,
       name: 'All unread',
       unread: countsMap[READING_LIST] || 0,
-      newest: '0',
       parent: ''
     });
     nodes.push({
@@ -389,7 +384,6 @@ function createClient(baseUrl, username, apiPass, opts) {
       id: STARRED,
       name: 'Starred',
       unread: starredCount || 0,
-      newest: '0',
       parent: ''
     });
 
@@ -412,7 +406,6 @@ function createClient(baseUrl, username, apiPass, opts) {
         id: labelId,
         name: lastLabelSegment(labelId),
         unread: 0,
-        newest: '0',
         parent: parent
       });
     }
@@ -446,7 +439,6 @@ function createClient(baseUrl, username, apiPass, opts) {
         id: feedId,
         name: String(sub.title || feedId),
         unread: countsMap[feedId] || 0,
-        newest: newestMap[feedId] || '0',
         parent: parent
       });
     }
@@ -489,10 +481,7 @@ function createClient(baseUrl, username, apiPass, opts) {
   /**
    * One page of a stream. Label streams are %2F-encoded; the reading-list
    * additionally excludes already-read items. Returns
-   * {items: [...], continuation: string, newest: string} — continuation ''
-   * means no more; newest is the raw timestampUsec of the newest article in
-   * the page (decimal µs string, '0' when the page has no items), so the
-   * watch can store it as the feed's last-seen when the feed is opened.
+   * {items: [...], continuation: string} — continuation '' means no more.
    */
   function getItems(stream, cont, n, unreadOnly, cb) {
     var enc = encodeStream(stream);
@@ -523,22 +512,15 @@ function createClient(baseUrl, username, apiPass, opts) {
         return;
       }
       var items = [];
-      var newest = '0';
       var list = parsed.items;
       if (list) {
         for (var i = 0; i < list.length; i++) {
           items.push(mapItem(list[i]));
-          var ts = String(list[i].timestampUsec || '');
-          if (ts.length > newest.length ||
-              (ts.length === newest.length && ts > newest)) {
-            newest = ts;
-          }
         }
       }
       cb(null, {
         items: items,
-        continuation: parsed.continuation || '',
-        newest: newest
+        continuation: parsed.continuation || ''
       });
     });
   }
