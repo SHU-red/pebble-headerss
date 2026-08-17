@@ -24,6 +24,7 @@
 #define DIVIDER_H 1       // hairline divider under the top bar (P6)
 #define SIDEBAR_W 20      // slim accent sidebar holding the icons (P14: 26 -> 20)
 #define HEADER_META_H 18  // feed·time line + padding below the heading
+#define END_BAR_H 16      // bottom hint band (reserved for long articles)
 
 // Sidebar icons: monochrome (inactive = black, active = white — except the
 // highlight M chip, which uses the shared alarm color), stacked in a
@@ -93,10 +94,6 @@ static TextLayer *s_top_text;
 static Layer *s_sidebar;   // accent bar with the eye/star/M icons
 static Layer *s_end_bar;   // grey "LONG" hint at the bottom of a long article
 static AppTimer *s_clock_timer; // 1-minute tick: redraws the sidebar clock
-
-static Layer *s_toast;        // scroll-mode entry chip (brief centered flash)
-static bool s_toast_visible;  // chip drawn only while true
-static AppTimer *s_toast_timer; // 1.2 s auto-hide
 
 static TextLayer *s_status;   // full-screen "Loading..." / "All caught up"
 static Layer *s_status_check; // accent GPath check above the status text
@@ -1011,6 +1008,16 @@ static void body_update(Layer *layer, GContext *ctx) {
   }
 }
 
+//! The visible height of a page's scroll area. Long articles (which carry
+//! the bottom Scroll/Next hint) end their scroll area EARLY — the reserved
+//! band (END_BAR_H) stays clear of the article text at every scroll
+//! position, so the hint never draws over a line. Short articles fill the
+//! whole page.
+static int16_t page_view_h(const Page *p) {
+  return (p->content_h > s_view_h + 8) ? (int16_t)(s_view_h - END_BAR_H)
+                                       : s_view_h;
+}
+
 //! Size the page's scrollable unit: the accent header (full wrapped heading
 //! + feed·time line) with the summary body stacked below it; the content
 //! wrapper covers both so they scroll together. Adds room for the
@@ -1033,6 +1040,10 @@ static void page_resize(Page *p) {
             (long)p->idx, old_h, (int)total, hh,
             (int)p->body_layout.height);
   }
+  // Keep the clip in sync: a short article can grow long when the full
+  // summary lands, and vice versa — the bottom band appears/disappears
+  // with the hint.
+  layer_set_frame(p->root, GRect(0, 0, s_win_w, page_view_h(p)));
   // Preserve the current offset; re-clamp when the content grew/shrunk so a
   // resize can never strand the offset past the new bottom.
   int32_t off = layer_get_frame(p->content).origin.y;
@@ -1082,29 +1093,15 @@ static void page_set_offset(Page *p, int32_t y) {
   }
 }
 
-#define END_BAR_H 16
-
-//! Filled down triangle (no arrow glyph exists in the system fonts): apex
-//! on top, base at the bottom, centered on cx, 1 px rows.
+//! Filled down triangle (no arrow glyph exists in the system fonts): the
+//! wide base on TOP tapering to the point at the bottom (a ▼ — the DOWN
+//! button), centered on cx, 1 px rows.
 static void triangle_down(GContext *ctx, int16_t cx, int16_t y, int16_t w,
                           int16_t h) {
   for (int16_t r = 0; r < h; r++) {
-    int16_t half = (int16_t)((int32_t)r * (w / 2) / (h - 1));
+    int16_t half = (int16_t)((int32_t)(h - 1 - r) * (w / 2) / (h - 1));
     graphics_draw_line(ctx, GPoint(cx - half, y + r), GPoint(cx + half, y + r));
   }
-}
-
-//! Rendered width of "HOLD [▼]: <what>" (text + triangle + the two gaps).
-static int16_t hint_width(const char *what, GFont f, int16_t tri_w) {
-  char suffix[16];
-  snprintf(suffix, sizeof(suffix), ": %s", what);
-  GSize s_pre = graphics_text_layout_get_content_size(
-      "HOLD ", f, GRect(0, 0, 200, 32), GTextOverflowModeFill,
-      GTextAlignmentLeft);
-  GSize s_suf = graphics_text_layout_get_content_size(
-      suffix, f, GRect(0, 0, 200, 32), GTextOverflowModeFill,
-      GTextAlignmentLeft);
-  return s_pre.w + 2 + tri_w + 2 + s_suf.w;
 }
 
 //! Centered "HOLD [▼]: <what>" — HOLD + the down-triangle + the action, so
@@ -1141,17 +1138,17 @@ static void hint_draw(GContext *ctx, GRect b, const char *what, GFont f,
                      GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 }
 
-//! Hint at the bottom of the view, two states — it only ever tells what
-//! HOLD does, never what a tap does:
+//! Hint at the bottom of the view, two states — the bottom line is a
+//! reserved band (long articles end their scroll area early, page_view_h),
+//! so the hint is never drawn over article text:
 //! - initial view of a LONG article (not in scroll mode): "HOLD ▼: Scroll"
 //!   in the muted theme color — the prompt that holding enters scroll mode
 //!   (tap still skips);
-//! - scroll mode (any position, including the very end): "HOLD ▼: Next" in
-//!   the accent color — the persistent mode indicator; at the end the tap
-//!   is held back (the advance needs the explicit HOLD).
-//! Text-only, no bar fill, so nothing is painted over the article; the
-//! content itself scrolls one extra line so the last article line clears
-//! the hint (page_scroll_min).
+//! - scrolled to the very end (scroll mode): "HOLD ▼: Next" in the accent
+//!   color — the tap there is held back, the advance needs the explicit
+//!   HOLD.
+//! Mid-scroll the line stays EMPTY — the user knows a single tap scrolls,
+//! so nothing hints at it.
 static void end_bar_update(Layer *layer, GContext *ctx) {
   if (s_count == 0 || !cur_page() || !cur_page()->content) {
     return;
@@ -1163,70 +1160,16 @@ static void end_bar_update(Layer *layer, GContext *ctx) {
   }
   GRect b = layer_get_bounds(layer);
   if (s_scroll_mode) {
+    int32_t off = layer_get_frame(p->content).origin.y;
+    if (off > page_scroll_min(p) + 2) {
+      return; // mid-scroll: nothing — the tap needs no hint
+    }
     hint_draw(ctx, b, "Next", fonts_get_system_font(FONT_KEY_GOTHIC_14),
               s_accent, 14);
-  } else {
-    hint_draw(ctx, b, "Scroll", fonts_get_system_font(FONT_KEY_GOTHIC_14),
-              theme_muted(), 14);
-  }
-}
-
-//! Brief centered chip ("HOLD ▼: Scroll") confirming the hold entered
-//! scroll mode. An INVERTED box: the pill fills with the font color and the
-//! text writes in the page color (white pill + black text in dark mode,
-//! black pill + white text in light) — the maximum contrast against the
-//! article behind, no bleed-through. Auto-hidden after 1.2 s; the
-//! persistent bottom hint takes over from there.
-static void toast_update(Layer *layer, GContext *ctx) {
-  if (!s_toast_visible) {
     return;
   }
-  GRect b = layer_get_bounds(layer);
-  GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
-  int16_t pill_w = hint_width("Scroll", f, 7) + 24; // 12 px padding a side
-  int16_t max_w = b.size.w - SIDEBAR_W - 4;         // just clear of the sidebar
-  if (pill_w > max_w) {
-    pill_w = max_w;
-  }
-  GRect pill = GRect(b.size.w / 2 - pill_w / 2, b.size.h / 2 - 17, pill_w, 34);
-  graphics_context_set_fill_color(ctx, theme_fg());
-  graphics_fill_rect(ctx, pill, 6, GCornersAll);
-  hint_draw(ctx, GRect(pill.origin.x, pill.origin.y + 7, pill.size.w, 20),
-            "Scroll", f, theme_bg(), 18);
-}
-
-static void toast_timer_cb(void *data) {
-  s_toast_timer = NULL;
-  s_toast_visible = false;
-  if (s_toast) {
-    layer_mark_dirty(s_toast);
-  }
-}
-
-static void toast_show(void) {
-  s_toast_visible = true;
-  if (s_toast) {
-    layer_mark_dirty(s_toast);
-  }
-  if (s_toast_timer) {
-    app_timer_cancel(s_toast_timer);
-  }
-  s_toast_timer = app_timer_register(1200, toast_timer_cb, NULL);
-}
-
-//! Drop the chip immediately (article change / teardown) so it never leaks
-//! across a transition.
-static void toast_hide(void) {
-  if (s_toast_timer) {
-    app_timer_cancel(s_toast_timer);
-    s_toast_timer = NULL;
-  }
-  if (s_toast_visible) {
-    s_toast_visible = false;
-    if (s_toast) {
-      layer_mark_dirty(s_toast);
-    }
-  }
+  hint_draw(ctx, b, "Scroll", fonts_get_system_font(FONT_KEY_GOTHIC_14),
+            theme_muted(), 14);
 }
 
 // ---------------------------------------------------------------------------
@@ -1543,7 +1486,18 @@ static void page_build(Page *p, int32_t idx) {
   // accent heading and the summary scroll together (heading first, body
   // below), so a long article's last word is reachable by scrolling and only
   // a further DOWN at the very end advances.
-  p->root = layer_create(GRect(0, 0, s_win_w, s_view_h));
+  // The root's height is the page's clip. Long articles end the scroll area
+  // early (the layouts already measure the content), so the reserved bottom
+  // band stays empty for the Scroll/Next hint.
+  int16_t hh = (int16_t)(p->head_layout.height + HEADER_META_H);
+  int16_t body_h = p->body_layout.height + 4;
+  if (p->idx == s_full_idx && s_full_fetching && !s_full_done) {
+    body_h += FULL_HINT_H;
+  }
+  bool long_article = ((int32_t)hh + 2 + body_h) > s_view_h + 8;
+  p->root = layer_create(GRect(0, 0, s_win_w,
+                               long_article ? s_view_h - END_BAR_H
+                                            : s_view_h));
   layer_add_child(s_page_area, p->root);
 
   // Manual scroll wrapper (no ScrollLayer): a plain layer holding the
@@ -1687,7 +1641,8 @@ static void transition_anim_stopped(Animation *anim, bool finished, void *contex
     transition_watchdog_cancel();
     s_advancing = false;
     s_advance_guard = false;
-    layer_set_frame(cur_page()->root, GRect(0, 0, s_win_w, s_view_h));
+    layer_set_frame(cur_page()->root,
+                    GRect(0, 0, s_win_w, page_view_h(cur_page())));
   }
 }
 
@@ -1709,7 +1664,6 @@ static void transition_to(int8_t dir) {
   s_advance_guard = (dir > 0);
   s_dir = dir;
   s_target_idx = nidx;
-  toast_hide(); // the chip must not leak across an article change
   mark_timer_cancel(); // leaving the current article: drop its auto-mark
   transition_watchdog_cancel();
   s_transition_watchdog = app_timer_register(2000, transition_watchdog_cb, NULL);
@@ -1718,12 +1672,13 @@ static void transition_to(int8_t dir) {
                    // the progress line + top bar)
   Page *sp = spare_page();
   page_build(sp, nidx);
-  layer_set_frame(sp->root, GRect(0, top + dir * s_view_h, s_win_w, s_view_h));
-
   Page *cp = cur_page();
+  int16_t sh = page_view_h(sp); // per-page clip heights: long articles end
+  int16_t ch = page_view_h(cp); // early, so the hint band never carries text
+  layer_set_frame(sp->root, GRect(0, top + dir * s_view_h, s_win_w, sh));
 
   s_from_a = layer_get_frame(cp->root);
-  s_to_a = GRect(0, top - dir * s_view_h, s_win_w, s_view_h);
+  s_to_a = GRect(0, top - dir * s_view_h, s_win_w, ch);
   s_anim_a = (Animation *)property_animation_create_layer_frame(cp->root, &s_from_a, &s_to_a);
   animation_set_duration(s_anim_a, 300);
   animation_set_curve(s_anim_a, AnimationCurveEaseOut);
@@ -1733,7 +1688,7 @@ static void transition_to(int8_t dir) {
   animation_schedule(s_anim_a);
 
   s_from_b = layer_get_frame(sp->root);
-  s_to_b = GRect(0, top, s_win_w, s_view_h);
+  s_to_b = GRect(0, top, s_win_w, sh);
   s_anim_b = (Animation *)property_animation_create_layer_frame(sp->root, &s_from_b, &s_to_b);
   animation_set_duration(s_anim_b, 300);
   animation_set_curve(s_anim_b, AnimationCurveEaseOut);
@@ -1917,7 +1872,6 @@ static void timeline_down_hold_click(ClickRecognizerRef rec, void *ctx) {
     APP_LOG(APP_LOG_LEVEL_INFO, "nav: hold DOWN -> scroll mode");
     s_scroll_mode = true;
     vibes_short_pulse();
-    toast_show(); // "HOLD ▼: Scroll" chip: the hold just flipped the mode
     if (s_end_bar) {
       layer_mark_dirty(s_end_bar); // the prompt hides until the end
     }
@@ -2090,16 +2044,6 @@ static void timeline_window_load(Window *window) {
   layer_add_child(root, s_sidebar);
   s_clock_timer = app_timer_register(60000, clock_tick_cb, NULL);
 
-  // Scroll-mode entry chip: a brief centered "TAP to scroll" flash over the
-  // page. Added last so it draws above the pages, the end bar and the
-  // sidebar; hidden unless a toast is active.
-  s_toast = layer_create(GRect(0, TOP_BAR_H + PROGRESS_H + DIVIDER_H,
-                               s_win_w, s_view_h));
-  layer_set_update_proc(s_toast, toast_update);
-  layer_add_child(root, s_toast);
-  s_toast_visible = false;
-  s_toast_timer = NULL;
-
   window_set_click_config_provider(window, timeline_click_config_provider);
 
   status_update();
@@ -2110,7 +2054,6 @@ static void timeline_window_load(Window *window) {
 //! and release the layer pointers.
 static void timeline_close(void) {
   mark_timer_cancel(); // the pending auto-mark must not fire on dead pages
-  toast_hide(); // cancel the chip timer; the layer dies with the window
   if (s_clock_timer) {
     app_timer_cancel(s_clock_timer);
     s_clock_timer = NULL;
@@ -2193,10 +2136,6 @@ static void timeline_window_unload(Window *window) {
   if (s_sidebar) {
     layer_destroy(s_sidebar);
     s_sidebar = NULL;
-  }
-  if (s_toast) {
-    layer_destroy(s_toast);
-    s_toast = NULL;
   }
   if (s_page_area) {
     layer_destroy(s_page_area); // destroys the end bar too

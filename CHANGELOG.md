@@ -5,19 +5,16 @@
 **HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
 articles full-screen, mark read, star favourites, highlight words.
 
-**v0.3.40**
-- Scroll-mode entry chip on a solid inverted box — readable over any
-  article text, both themes
-- Bottom hints only ever talk about holding: "HOLD ▼: Scroll" in the
-  skim view, "HOLD ▼: Next" while scrolling (never what a tap does)
-- Scroll-mode entry flash: a centered "HOLD ▼: Scroll" chip confirms
-  the hold; the bottom line then reads "HOLD ▼: Next" (accent) the
-  whole way
+**v0.3.41**
+- Bottom-line hints on a reserved clean band — the article scrolls above
+  it, so "HOLD ▼: Scroll" (long articles) and "HOLD ▼: Next" (at the
+  end of a scroll) never sit on top of text
+- No entry toast — the bottom line alone tells you what holding does;
+  mid-scroll it stays empty (a single tap scrolling needs no hint)
 - Fast skimming: DOWN always jumps to the next article; long articles
-  invite a hold with a centered "HOLD ▼: Scroll" hint
+  invite a hold with "HOLD ▼: Scroll"
 - Hold DOWN enters scroll mode: taps scroll page by page, a hold jumps
-  to the next article at any time, at the end the hint says hold to
-  continue
+  to the next article at any time, "HOLD ▼: Next" at the end
 - UP mirrors DOWN: previous article in the skim view, scroll-up inside
   scroll mode, exits back to the skim view at the top
 - Read articles in full — nothing is ever cut off; long articles scroll
@@ -29,6 +26,20 @@ articles full-screen, mark read, star favourites, highlight words.
 - Star favourites, unread-only mode, auto-mark-read, per-feed
   mark-all-read
 - Highlight words survive reinstalls
+
+## 0.3.41
+
+- **Clean bottom band.** The bottom hint now sits in a reserved strip:
+  long articles end their scroll area early, so the "HOLD ▼: Scroll"
+  (skim view, muted) and "HOLD ▼: Next" (scrolled to the end, accent)
+  lines never draw over article text. Mid-scroll the strip stays empty —
+  a single tap scrolling needs no hint. Short articles fill the whole
+  page (no band).
+- **Entry toast removed.** The brief "HOLD ▼: Scroll" chip is gone — the
+  bottom line alone is the indicator.
+- **Down-triangle fixed.** The ▼ now points down (wide base on top,
+  point at the bottom — the DOWN button), drawn as one measured unit
+  with the text.
 
 ## 0.3.40
 
