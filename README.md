@@ -2,8 +2,8 @@
 
 FreshRSS feed headings on your Pebble Time 2 — browse the feed tree, run
 through articles, mark them read, star favourites. Native Timeline-style
-reading view with a black top bar, always-accent heading and an accent icon
-sidebar (read/unread dot + star).
+reading view with a black top bar, editorial headings and an accent sidebar
+(clock, unread dot, star, match badge).
 
 > [!NOTE]  
 > ☕ **Buy Me A Coffee** — These are small tools, built with AI — on purpose. There isn't enough time to learn every language and dive into every rabbit hole, so AI lets me solve real problems from my daily life and homelab — and that matters more to me than clever code.
@@ -21,20 +21,22 @@ sidebar (read/unread dot + star).
   ![Feed tree](resources/store/menu.png)
 
 - **Timeline reading view** — one article full screen: 2 px accent progress
-  line at the very top, black top bar with the stream name in accent, accent
-  heading bar with the FULL article heading (multi-line, never truncated)
-  + feed·time, scrollable summary body — the full summary is fetched on
-  demand (the phone streams the complete text, chunked) so nothing is ever
-  shortened; scrolling past the bottom slides to the next article
-  (continuous two-page slide, 260 ms), scrolling up past the top goes back
-  to previously read articles; a full-height accent sidebar holds three
-  always-visible icons: eye (white = unread, black = read), star
-  (yellow = favourited), M (lights up when highlight words match)
+  line at the very top, black top bar with the stream name in accent,
+  editorial header (GOTHIC_24_BOLD heading in the theme color on the page
+  background, accent feed·time line, 2 px accent rule), full summary body —
+  fetched on demand (the phone streams the complete text, chunked) so
+  nothing is ever shortened; the full-height accent sidebar holds a clock
+  at the top, the unread dot (white = unread), the star (outlined yellow =
+  favourited) and the M badge (alarm-red when highlight words match)
 
   ![Article](resources/store/article.png)
-- **Read through** — opening a stream shows the first article full screen;
-  scroll to the bottom (or press DOWN) to advance, scroll up past the top to
-  go back; **SELECT toggles read/unread** (and cancels the auto-mark timer),
+- **Read through** — opening a stream shows the first article; DOWN always
+  skips to the next; long articles show a centered "HOLD ▼: Scroll" hint —
+  holding enters scroll mode, where taps page-scroll (~3/4 viewport), a
+  hold jumps to the next article at any time and the hint reads
+  "HOLD ▼: Next"; UP mirrors DOWN (previous article in the skim view,
+  scroll-up inside scroll mode, back to the skim view at the top);
+  **SELECT toggles read/unread** (and cancels the auto-mark timer),
   long-press SELECT stars; articles are marked read after being shown for
   the configured time (see Auto mark read)
 - **Unread only** — watch toggle (sub-menu): hides read articles from the
@@ -42,10 +44,10 @@ sidebar (read/unread dot + star).
 - **Star** — long-press SELECT toggles the star; starred articles show a
   yellow star in the sidebar
 - **Word highlighting** — set up to 10 words/phrases in the phone settings;
-  matches are accent + bold + underlined in the summary and white + bold +
-  underlined in the heading (whole words, case-insensitive, hyphens count
-  as boundaries); updates live while reading; the sidebar's M lights up on
-  articles with matches
+  matches are accent + bold + underlined in the summary and accent-filled
+  chips with black text in the heading (whole words, case-insensitive,
+  hyphens count as boundaries); updates live while reading; the sidebar's M
+  badge lights up on articles with matches
 
   ![Highlight matches](resources/store/article_match.png)
 
@@ -55,15 +57,15 @@ sidebar (read/unread dot + star).
   top strip with accent dots on the root menu, permanent accent right spine
   in every menu, unread counts as filled accent pills, accent-selected rows;
   reader = 2 px accent progress line at the very top, black top bar with
-  accent stream name, always-accent heading with black text, full-height
-  icon sidebar (eye / star / M); light theme selectable from the phone
-  settings
+  accent stream name, editorial headings (theme color, accent feed·time +
+  rule), accent sidebar (clock / unread dot / star / M); light theme
+  selectable from the phone settings or the watch's Theme row
 - **Settings** — UP on the top black strip opens the watch sub-menu:
-  Refresh, Mark all read, Connection info (account + unread), **Auto mark
-  read** (Never / Immediately / 1s / 2s / 3s / 5s / 10s), Unread only,
+  Refresh, Mark all read, **Auto mark read** (Never / Immediately / 1s /
+  2s / 3s / 5s / 10s), Unread only, **Theme** (System / Dark / Light),
   Important row / Progress line toggles; the connection/appearance page
   lives in the phone app settings (Clay): FreshRSS URL, username, API
-  password, theme
+  password, accent color, touch, highlight words
 
   ![Sub-menu](resources/store/menu_2.png)
 
