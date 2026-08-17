@@ -1008,14 +1008,17 @@ static void body_update(Layer *layer, GContext *ctx) {
   }
 }
 
-//! The visible height of a page's scroll area. Long articles (which carry
-//! the bottom Scroll/Next hint) end their scroll area EARLY — the reserved
-//! band (END_BAR_H) stays clear of the article text at every scroll
-//! position, so the hint never draws over a line. Short articles fill the
-//! whole page.
+//! The visible height of a page's scroll area. In the skim view (not
+//! scroll mode) a long article ends early so the reserved band stays clear
+//! for the "HOLD ▼: Scroll" hint. In scroll mode the article takes the
+//! FULL page — no empty bar while scrolling — and the "HOLD ▼: Next" line
+//! acts as the article's last line (the scroll range leaves room for it).
 static int16_t page_view_h(const Page *p) {
-  return (p->content_h > s_view_h + 8) ? (int16_t)(s_view_h - END_BAR_H)
-                                       : s_view_h;
+  bool long_article = (p->content_h > s_view_h + 8);
+  if (long_article && !s_scroll_mode) {
+    return (int16_t)(s_view_h - END_BAR_H);
+  }
+  return s_view_h;
 }
 
 //! Size the page's scrollable unit: the accent header (full wrapped heading
@@ -1062,14 +1065,14 @@ static void page_resize(Page *p) {
   }
 }
 
-//! The furthest the content can scroll. Long articles (which show the
-//! HOLD DOWN hint) get one extra line of scroll room so the article's last
-//! line is never hidden behind the hint; short articles keep the plain
-//! bottom (content bottom == view bottom).
+//! The furthest the content can scroll. Long articles leave room for the
+//! "HOLD ▼: Next" line at the very end — it reads like the article's own
+//! last line, never over text. Short articles keep the plain bottom
+//! (content bottom == view bottom).
 static int32_t page_scroll_min(const Page *p) {
   int32_t min_y = s_view_h - p->content_h;
-  if (p->content_h > s_view_h + 8 && p->body_layout.line_h > 0) {
-    min_y -= p->body_layout.line_h;
+  if (p->content_h > s_view_h + 8) {
+    min_y -= END_BAR_H;
   }
   return min_y;
 }
@@ -1138,17 +1141,15 @@ static void hint_draw(GContext *ctx, GRect b, const char *what, GFont f,
                      GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 }
 
-//! Hint at the bottom of the view, two states — the bottom line is a
-//! reserved band (long articles end their scroll area early, page_view_h),
-//! so the hint is never drawn over article text:
+//! Hint at the bottom of the view, two states, both in the accent color:
 //! - initial view of a LONG article (not in scroll mode): "HOLD ▼: Scroll"
-//!   in the muted theme color — the prompt that holding enters scroll mode
+//!   on the reserved band — the prompt that holding enters scroll mode
 //!   (tap still skips);
-//! - scrolled to the very end (scroll mode): "HOLD ▼: Next" in the accent
-//!   color — the tap there is held back, the advance needs the explicit
-//!   HOLD.
+//! - scrolled to the very end (scroll mode): "HOLD ▼: Next" — it reads as
+//!   the article's last line (the scroll range leaves the band's room), the
+//!   tap there is held back, the advance needs the explicit HOLD.
 //! Mid-scroll the line stays EMPTY — the user knows a single tap scrolls,
-//! so nothing hints at it.
+//! so nothing hints at it; the article fills the full page while scrolling.
 static void end_bar_update(Layer *layer, GContext *ctx) {
   if (s_count == 0 || !cur_page() || !cur_page()->content) {
     return;
@@ -1169,7 +1170,7 @@ static void end_bar_update(Layer *layer, GContext *ctx) {
     return;
   }
   hint_draw(ctx, b, "Scroll", fonts_get_system_font(FONT_KEY_GOTHIC_14),
-            theme_muted(), 14);
+            s_accent, 14);
 }
 
 // ---------------------------------------------------------------------------
@@ -1603,6 +1604,9 @@ static void transition_finalize(void) {
   s_advancing = false;
   s_advance_guard = false;
   s_scroll_mode = false; // every article starts in the tap-to-skip view
+  if (cur_page()) {
+    page_resize(cur_page()); // the skim band returns on the settled page
+  }
   mark_timer_start(s_idx);
   full_summary_request(s_idx);
   full_summary_apply(); // heal: apply a completed fetch if the chunk path missed it
@@ -1750,12 +1754,18 @@ static void timeline_up_click(ClickRecognizerRef rec, void *ctx) {
     page_set_offset(p, target);
     if (target == 0) {
       s_scroll_mode = false; // at the top: back to the initial view
+      if (cur_page()) {
+        page_resize(cur_page()); // the hint band returns
+      }
       if (s_end_bar) {
         layer_mark_dirty(s_end_bar); // the prompt re-appears
       }
     }
   } else {
     s_scroll_mode = false; // already at the top: just exit scroll mode
+    if (cur_page()) {
+      page_resize(cur_page()); // the hint band returns
+    }
     if (s_end_bar) {
       layer_mark_dirty(s_end_bar);
     }
@@ -1872,6 +1882,9 @@ static void timeline_down_hold_click(ClickRecognizerRef rec, void *ctx) {
     APP_LOG(APP_LOG_LEVEL_INFO, "nav: hold DOWN -> scroll mode");
     s_scroll_mode = true;
     vibes_short_pulse();
+    if (cur_page()) {
+      page_resize(cur_page()); // the article takes the full page now
+    }
     if (s_end_bar) {
       layer_mark_dirty(s_end_bar); // the prompt hides until the end
     }

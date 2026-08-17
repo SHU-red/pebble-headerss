@@ -5,12 +5,11 @@
 **HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
 articles full-screen, mark read, star favourites, highlight words.
 
-**v0.3.41**
-- Bottom-line hints on a reserved clean band — the article scrolls above
-  it, so "HOLD ▼: Scroll" (long articles) and "HOLD ▼: Next" (at the
-  end of a scroll) never sit on top of text
-- No entry toast — the bottom line alone tells you what holding does;
-  mid-scroll it stays empty (a single tap scrolling needs no hint)
+**v0.3.42**
+- Both bottom-line hints in the accent color — "HOLD ▼: Scroll" on
+  long articles, "HOLD ▼: Next" at the end of a scroll
+- The article fills the whole screen while scrolling — no empty bottom
+  bar; the "Next" line reads like the article's own last line
 - Fast skimming: DOWN always jumps to the next article; long articles
   invite a hold with "HOLD ▼: Scroll"
 - Hold DOWN enters scroll mode: taps scroll page by page, a hold jumps
@@ -26,6 +25,17 @@ articles full-screen, mark read, star favourites, highlight words.
 - Star favourites, unread-only mode, auto-mark-read, per-feed
   mark-all-read
 - Highlight words survive reinstalls
+
+## 0.3.42
+
+- **Both hints in the accent color.** "HOLD ▼: Scroll" (skim view) and
+  "HOLD ▼: Next" (scrolled to the end) now share the accent color — the
+  text-color/muted split is gone.
+- **Full-page scroll.** In scroll mode the article takes the whole page
+  — no empty bottom bar while scrolling. "HOLD ▼: Next" acts as the
+  article's last line: the scroll range leaves the bottom line's room,
+  so it only appears at the very end, never over text. The skim view
+  keeps its reserved band for "HOLD ▼: Scroll".
 
 ## 0.3.41
 
