@@ -5,12 +5,16 @@
 **HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
 articles full-screen, mark read, star favourites, highlight words.
 
-**v0.3.39**
-- Scroll-mode entry flash: a centered "TAP to scroll" chip confirms the
-  hold; the bottom line then reads "TAP scroll · HOLD next" (accent) the
-  whole way, "- HOLD DOWN -" at the end
+**v0.3.40**
+- Scroll-mode entry chip on a solid inverted box — readable over any
+  article text, both themes
+- Bottom hints only ever talk about holding: "HOLD ▼: Scroll" in the
+  skim view, "HOLD ▼: Next" while scrolling (never what a tap does)
+- Scroll-mode entry flash: a centered "HOLD ▼: Scroll" chip confirms
+  the hold; the bottom line then reads "HOLD ▼: Next" (accent) the
+  whole way
 - Fast skimming: DOWN always jumps to the next article; long articles
-  invite a hold with a centered "- HOLD DOWN -" hint
+  invite a hold with a centered "HOLD ▼: Scroll" hint
 - Hold DOWN enters scroll mode: taps scroll page by page, a hold jumps
   to the next article at any time, at the end the hint says hold to
   continue
@@ -25,6 +29,18 @@ articles full-screen, mark read, star favourites, highlight words.
 - Star favourites, unread-only mode, auto-mark-read, per-feed
   mark-all-read
 - Highlight words survive reinstalls
+
+## 0.3.40
+
+- **Readable entry chip.** The scroll-mode chip is now an inverted box:
+  the pill fills with the font color and the text writes in the page
+  color — white pill with black text in dark mode, black pill with
+  white text in light. No more bleed-through from the article behind.
+- **Hold-only hints.** The bottom line now says "HOLD ▼: Scroll" in the
+  skim view (muted) and "HOLD ▼: Next" while scrolling (accent) — it
+  never mentions what a single tap does. The ▼ is a drawn down
+  triangle (no arrow glyph exists in the system fonts), laid out as one
+  centered unit with the text.
 
 ## 0.3.39
 

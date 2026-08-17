@@ -1084,15 +1084,71 @@ static void page_set_offset(Page *p, int32_t y) {
 
 #define END_BAR_H 16
 
-//! Hint at the bottom of the view, three states:
-//! - initial view of a LONG article (not in scroll mode): "- HOLD DOWN -"
-//!   in the muted theme color — the prompt to enter scroll mode (tap still
-//!   skips);
-//! - scroll mode, mid-scroll: "TAP scroll · HOLD next" in the accent color
-//!   — the persistent mode indicator: the hold flipped the tap behavior,
-//!   and this line keeps saying so until the end;
-//! - scrolled to the very end (scroll mode): "- HOLD DOWN -" muted again —
-//!   HOLD DOWN advances, the tap there is held back (explicit HOLD only).
+//! Filled down triangle (no arrow glyph exists in the system fonts): apex
+//! on top, base at the bottom, centered on cx, 1 px rows.
+static void triangle_down(GContext *ctx, int16_t cx, int16_t y, int16_t w,
+                          int16_t h) {
+  for (int16_t r = 0; r < h; r++) {
+    int16_t half = (int16_t)((int32_t)r * (w / 2) / (h - 1));
+    graphics_draw_line(ctx, GPoint(cx - half, y + r), GPoint(cx + half, y + r));
+  }
+}
+
+//! Rendered width of "HOLD [▼]: <what>" (text + triangle + the two gaps).
+static int16_t hint_width(const char *what, GFont f, int16_t tri_w) {
+  char suffix[16];
+  snprintf(suffix, sizeof(suffix), ": %s", what);
+  GSize s_pre = graphics_text_layout_get_content_size(
+      "HOLD ", f, GRect(0, 0, 200, 32), GTextOverflowModeFill,
+      GTextAlignmentLeft);
+  GSize s_suf = graphics_text_layout_get_content_size(
+      suffix, f, GRect(0, 0, 200, 32), GTextOverflowModeFill,
+      GTextAlignmentLeft);
+  return s_pre.w + 2 + tri_w + 2 + s_suf.w;
+}
+
+//! Centered "HOLD [▼]: <what>" — HOLD + the down-triangle + the action, so
+//! the hint only ever says what holding does (never what a single tap
+//! does). The triangle is drawn (no glyph in the fonts), measured into the
+//! layout so the whole string reads as one centered unit.
+static void hint_draw(GContext *ctx, GRect b, const char *what, GFont f,
+                      GColor color, int16_t font_h) {
+  char suffix[16];
+  snprintf(suffix, sizeof(suffix), ": %s", what);
+  GSize s_pre = graphics_text_layout_get_content_size(
+      "HOLD ", f, GRect(0, 0, 200, 32), GTextOverflowModeFill,
+      GTextAlignmentLeft);
+  GSize s_suf = graphics_text_layout_get_content_size(
+      suffix, f, GRect(0, 0, 200, 32), GTextOverflowModeFill,
+      GTextAlignmentLeft);
+  int16_t tri_w = (font_h >= 18) ? 7 : 6;
+  int16_t tri_h = (font_h >= 18) ? 5 : 4;
+  int16_t total = s_pre.w + 2 + tri_w + 2 + s_suf.w;
+  int16_t x = b.origin.x + (b.size.w - total) / 2;
+  if (x < b.origin.x) {
+    x = b.origin.x;
+  }
+  graphics_context_set_text_color(ctx, color);
+  graphics_draw_text(ctx, "HOLD ", f, GRect(x, b.origin.y, s_pre.w, b.size.h),
+                     GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+  graphics_context_set_stroke_color(ctx, color);
+  triangle_down(ctx, x + s_pre.w + 2 + tri_w / 2,
+                b.origin.y + font_h / 2 - 2, tri_w, tri_h);
+  graphics_context_set_text_color(ctx, color);
+  graphics_draw_text(ctx, suffix, f,
+                     GRect(x + s_pre.w + 2 + tri_w + 2, b.origin.y,
+                           s_suf.w, b.size.h),
+                     GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+}
+
+//! Hint at the bottom of the view, two states — it only ever tells what
+//! HOLD does, never what a tap does:
+//! - initial view of a LONG article (not in scroll mode): "HOLD ▼: Scroll"
+//!   in the muted theme color — the prompt that holding enters scroll mode
+//!   (tap still skips);
+//! - scroll mode (any position, including the very end): "HOLD ▼: Next" in
+//!   the accent color — the persistent mode indicator; at the end the tap
+//!   is held back (the advance needs the explicit HOLD).
 //! Text-only, no bar fill, so nothing is painted over the article; the
 //! content itself scrolls one extra line so the last article line clears
 //! the hint (page_scroll_min).
@@ -1101,63 +1157,42 @@ static void end_bar_update(Layer *layer, GContext *ctx) {
     return;
   }
   const Page *p = cur_page();
-  int32_t off = layer_get_frame(p->content).origin.y;
   bool long_article = (p->content_h > s_view_h + 8); // a real scroll area
   if (!long_article) {
     return;
   }
   GRect b = layer_get_bounds(layer);
   if (s_scroll_mode) {
-    bool at_bottom = (off <= page_scroll_min(p) + 2);
-    if (at_bottom) {
-      graphics_context_set_text_color(ctx, theme_muted());
-      graphics_draw_text(ctx, "- HOLD DOWN -",
-                         fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                         b, GTextOverflowModeTrailingEllipsis,
-                         GTextAlignmentCenter, NULL);
-    } else {
-      // Scroll mode, not at the end: the mode indicator (accent, so it
-      // reads differently from the muted invitations).
-      graphics_context_set_text_color(ctx, s_accent);
-      graphics_draw_text(ctx, "TAP scroll · HOLD next",
-                         fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                         b, GTextOverflowModeTrailingEllipsis,
-                         GTextAlignmentCenter, NULL);
-    }
-    return;
+    hint_draw(ctx, b, "Next", fonts_get_system_font(FONT_KEY_GOTHIC_14),
+              s_accent, 14);
+  } else {
+    hint_draw(ctx, b, "Scroll", fonts_get_system_font(FONT_KEY_GOTHIC_14),
+              theme_muted(), 14);
   }
-  // Initial mode: the prompt shows the whole time (the article sits at the
-  // top there).
-  graphics_context_set_text_color(ctx, theme_muted());
-  graphics_draw_text(ctx, "- HOLD DOWN -",
-                     fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                     b, GTextOverflowModeTrailingEllipsis,
-                     GTextAlignmentCenter, NULL);
 }
 
-//! Brief centered chip ("TAP to scroll") confirming the hold entered scroll
-//! mode. A page-colored rounded pill with the accent text, auto-hidden
-//! after 1.2 s; the persistent bottom hint takes over from there.
+//! Brief centered chip ("HOLD ▼: Scroll") confirming the hold entered
+//! scroll mode. An INVERTED box: the pill fills with the font color and the
+//! text writes in the page color (white pill + black text in dark mode,
+//! black pill + white text in light) — the maximum contrast against the
+//! article behind, no bleed-through. Auto-hidden after 1.2 s; the
+//! persistent bottom hint takes over from there.
 static void toast_update(Layer *layer, GContext *ctx) {
   if (!s_toast_visible) {
     return;
   }
   GRect b = layer_get_bounds(layer);
-  int16_t w = b.size.w - SIDEBAR_W - 20; // ends exactly at the sidebar edge
-  if (w > b.size.w - 8) {
-    w = b.size.w - 8;
+  GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  int16_t pill_w = hint_width("Scroll", f, 7) + 24; // 12 px padding a side
+  int16_t max_w = b.size.w - SIDEBAR_W - 4;         // just clear of the sidebar
+  if (pill_w > max_w) {
+    pill_w = max_w;
   }
-  GRect pill = GRect(b.size.w / 2 - w / 2, b.size.h / 2 - 17, w, 34);
-  graphics_context_set_fill_color(ctx, theme_bg());
+  GRect pill = GRect(b.size.w / 2 - pill_w / 2, b.size.h / 2 - 17, pill_w, 34);
+  graphics_context_set_fill_color(ctx, theme_fg());
   graphics_fill_rect(ctx, pill, 6, GCornersAll);
-  graphics_context_set_stroke_color(ctx, theme_muted());
-  graphics_draw_round_rect(ctx, pill, 6);
-  graphics_context_set_text_color(ctx, s_accent);
-  graphics_draw_text(ctx, "TAP to scroll",
-                     fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
-                     GRect(pill.origin.x, pill.origin.y + 7, pill.size.w, 20),
-                     GTextOverflowModeTrailingEllipsis,
-                     GTextAlignmentCenter, NULL);
+  hint_draw(ctx, GRect(pill.origin.x, pill.origin.y + 7, pill.size.w, 20),
+            "Scroll", f, theme_bg(), 18);
 }
 
 static void toast_timer_cb(void *data) {
@@ -1882,7 +1917,7 @@ static void timeline_down_hold_click(ClickRecognizerRef rec, void *ctx) {
     APP_LOG(APP_LOG_LEVEL_INFO, "nav: hold DOWN -> scroll mode");
     s_scroll_mode = true;
     vibes_short_pulse();
-    toast_show(); // "TAP to scroll" chip: the tap behavior just flipped
+    toast_show(); // "HOLD ▼: Scroll" chip: the hold just flipped the mode
     if (s_end_bar) {
       layer_mark_dirty(s_end_bar); // the prompt hides until the end
     }
