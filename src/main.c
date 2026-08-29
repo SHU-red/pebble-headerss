@@ -130,6 +130,10 @@ static void open_context_menu(const FeedNode *feed);
 static void dialog_dismiss_cb(void *data);
 static void dialog_show_working(const char *text);
 static void dialog_unload(Window *window);
+// Startup splash (defined below, used by ui_result/ui_tree_updated which
+// precede it): show/hide the "Fetching Feeds ..." screen.
+static void splash_hide(void);
+static void splash_show(void);
 
 //! Fill the dialog background with the current color.
 static void dialog_bg_update_proc(Layer *layer, GContext *ctx) {
@@ -412,6 +416,7 @@ static bool contains_ci(const char *hay, const char *needle) {
 }
 
 void ui_result(int code, const char *text) {
+  splash_hide(); // any result resolves the startup wait (or covers the menu)
   if (code == 0) {
     if (s_dialog_active) {
       // Success: show the phone's ResultText when present, else the
@@ -453,6 +458,7 @@ void ui_result(int code, const char *text) {
 //! working dialog ("Loading..." / "Refreshing...").
 void ui_tree_updated(void) {
   APP_LOG(APP_LOG_LEVEL_INFO, "startup: menu reload");
+  splash_hide(); // the first fetch answered: the menu takes over
   if (s_main_menu) {
     menu_layer_reload_data(s_main_menu);
   }
@@ -634,31 +640,33 @@ static int16_t draw_nav_icon(GContext *ctx, const FeedNode *node,
 
 //! RSS-fan glyph (three quarter-arcs from a corner + a dot), drawn in the
 //! accent — the first-run empty state's own mark instead of the stock cell.
-static void draw_rss_fan(GContext *ctx, GPoint cc, GColor c) {
+//! `size` is the fan radius in px (the menu mark uses 9, the startup splash
+//! a bigger 30).
+static void draw_rss_fan(GContext *ctx, GPoint cc, GColor c, int16_t size) {
   // Quarter-arc lookup: direction cosines/sines scaled by 8 at 180°, 150°,
   // 120°, 90° (the fan sweeps from pointing left up to pointing up).
   static const int8_t T[4][2] = { { -8, 0 }, { -7, 4 }, { -4, 7 }, { 0, 8 } };
   graphics_context_set_stroke_color(ctx, c);
   graphics_context_set_stroke_width(ctx, 2);
-  for (int r = 3; r <= 9; r += 3) {
+  int16_t step = (int16_t)(size / 3);
+  int16_t dot = (int16_t)(size / 9 + 1);
+  for (int16_t r = step; r <= size; r += step) {
     for (int i = 1; i < 4; i++) {
-      GPoint a = GPoint(cc.x - 8 + r * T[i - 1][0] / 8, cc.y - r * T[i - 1][1] / 8);
-      GPoint z = GPoint(cc.x - 8 + r * T[i][0] / 8, cc.y - r * T[i][1] / 8);
+      GPoint a = GPoint(cc.x - size + r * T[i - 1][0] / 8, cc.y - r * T[i - 1][1] / 8);
+      GPoint z = GPoint(cc.x - size + r * T[i][0] / 8, cc.y - r * T[i][1] / 8);
       graphics_draw_line(ctx, a, z);
     }
   }
   graphics_context_set_fill_color(ctx, c);
-  graphics_fill_circle(ctx, GPoint(cc.x - 8, cc.y), 2);
+  graphics_fill_circle(ctx, GPoint(cc.x - size, cc.y), dot);
 }
 
 //! First-run empty state: a centered accent RSS fan + "No feeds yet" +
 //! a muted setup hint — the reader's all-caught-up styling on the root
 //! menu, instead of the stock two-line cell.
 static void draw_empty_state(GContext *ctx, GRect b, bool selected) {
-  graphics_context_set_fill_color(ctx, selected ? s_accent : theme_bg());
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
   GColor ic = selected ? GColorBlack : s_accent;
-  draw_rss_fan(ctx, GPoint(20, b.size.h / 2 + 6), ic);
+  draw_rss_fan(ctx, GPoint(20, b.size.h / 2 + 6), ic, 9);
   graphics_context_set_text_color(ctx, selected ? GColorBlack : theme_fg());
   graphics_draw_text(ctx, "No feeds yet",
                      fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
@@ -669,6 +677,97 @@ static void draw_empty_state(GContext *ctx, GRect b, bool selected) {
                      fonts_get_system_font(FONT_KEY_GOTHIC_14),
                      GRect(34, 24, b.size.w - 40, 16),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+// ---------------------------------------------------------------------------
+// Startup splash: while the very first tree fetch is in flight on an empty
+// cache, the root menu shows the app logo (the RSS fan) big and centered
+// with a pulsing "Fetching Feeds ..." instead of a stalled-looking empty
+// list. A plain layer on the MAIN window — never a pushed dialog: the
+// dialog's push/pop raced the menu render at startup (crash). Hidden by
+// ui_tree_updated when the tree arrives; a watchdog drops it if the fetch
+// never answers so the menu's empty state (and any error dialog) shows.
+// ---------------------------------------------------------------------------
+
+static Layer *s_splash_layer;
+static bool s_splash_active;
+static uint8_t s_splash_phase; // animated ellipsis phase
+static AppTimer *s_splash_timer; // pulse tick (reschedules while active)
+static AppTimer *s_splash_watchdog; // one-shot: drop the splash if no tree
+
+//! Big centered app logo + the fetching label. The ellipsis pulses through
+//! the timer so the screen reads as alive, not stalled.
+static void splash_update(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  graphics_context_set_fill_color(ctx, theme_bg());
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  // The fan is drawn left of its anchor; the anchor shifts it right so the
+  // glyph itself sits centered, and up so the label lands below it.
+  GPoint cc = GPoint(b.size.w / 2 + 15, b.size.h / 2 - 6);
+  draw_rss_fan(ctx, cc, s_accent, 30);
+  static const char *const dots[] = { ".", "..", "..." };
+  char label[24];
+  snprintf(label, sizeof(label), "Fetching Feeds %s", dots[s_splash_phase % 3]);
+  graphics_context_set_text_color(ctx, theme_fg());
+  graphics_draw_text(ctx, label,
+                     fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                     GRect(0, b.size.h / 2 + 18, b.size.w, 22),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
+                     NULL);
+}
+
+//! Pulse tick: advance the ellipsis phase and repaint. MUST re-check the
+//! splash state: hide/unload can run while a tick is queued — touching a
+//! destroyed layer then faults the app (the dialog pulse has the same rule).
+static void splash_tick_cb(void *data) {
+  s_splash_timer = NULL;
+  if (!s_splash_active || !s_splash_layer) {
+    return;
+  }
+  s_splash_phase = (uint8_t)((s_splash_phase + 1) % 3);
+  layer_mark_dirty(s_splash_layer);
+  if (s_splash_active) {
+    s_splash_timer = app_timer_register(PULSE_INTERVAL_MS, splash_tick_cb, NULL);
+  }
+}
+
+//! The first fetch did not answer in time: drop the splash so the menu's
+//! empty state ("No feeds yet" + setup hint) is the feedback again.
+static void splash_watchdog_cb(void *data) {
+  s_splash_watchdog = NULL;
+  splash_hide();
+}
+
+static void splash_show(void) {
+  if (!s_splash_layer || s_splash_active) {
+    return;
+  }
+  s_splash_active = true;
+  s_splash_phase = 0;
+  layer_set_hidden(s_splash_layer, false);
+  layer_mark_dirty(s_splash_layer);
+  if (!s_splash_timer) {
+    s_splash_timer = app_timer_register(PULSE_INTERVAL_MS, splash_tick_cb, NULL);
+  }
+  if (!s_splash_watchdog) {
+    s_splash_watchdog =
+        app_timer_register(REQUEST_TIMEOUT_MS, splash_watchdog_cb, NULL);
+  }
+}
+
+static void splash_hide(void) {
+  if (s_splash_timer) {
+    app_timer_cancel(s_splash_timer);
+    s_splash_timer = NULL;
+  }
+  if (s_splash_watchdog) {
+    app_timer_cancel(s_splash_watchdog);
+    s_splash_watchdog = NULL;
+  }
+  if (s_splash_active && s_splash_layer) {
+    s_splash_active = false;
+    layer_set_hidden(s_splash_layer, true);
+  }
 }
 
 static void main_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index,
@@ -755,7 +854,7 @@ static void main_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
   }
   int tree_row = root_data_to_tree(row - 1);
   if (tree_row < 0) {
-    timeline_open(IMPORTANT_STREAM, "Important");
+    timeline_open(IMPORTANT_STREAM, "Important", 0); // no tree node: unknown
     return;
   }
   const FeedNode *node = tree_root_node(tree_row);
@@ -763,11 +862,11 @@ static void main_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
     push_folder_window(node->id, node->name);
   } else {
     // Specials ("All unread", "Starred", "Important") and feeds open the
-    // timeline.
-    timeline_open(node->id, node->name);
+    // timeline. The unread count is the stream's real size — it pins the
+    // progress bar so a big feed never shows 100% after one page.
+    timeline_open(node->id, node->name, node->unread);
   }
 }
-
 // Custom click handling so UP on the first entry opens the sub-menu and the
 // selection starts on the first tree row (not the dots row) — launcher idiom.
 static void main_up_click(ClickRecognizerRef rec, void *ctx) {
@@ -849,6 +948,12 @@ static void main_window_load(Window *window) {
   // pointer -> the startup crash).
   MenuIndex first = { .section = 0, .row = 1 };
   menu_layer_set_selected_index(s_main_menu, first, MenuRowAlignCenter, false);
+  // Startup splash on top of the menu: hidden until the first fetch needs
+  // it (init shows it when no cached tree exists; ui_tree_updated hides it).
+  s_splash_layer = layer_create(bounds);
+  layer_set_update_proc(s_splash_layer, splash_update);
+  layer_set_hidden(s_splash_layer, true);
+  layer_add_child(root, s_splash_layer);
 }
 
 static void main_window_unload(Window *window) {
@@ -861,6 +966,19 @@ static void main_window_unload(Window *window) {
 #endif
   menu_layer_destroy(s_main_menu);
   s_main_menu = NULL;
+  if (s_splash_timer) {
+    app_timer_cancel(s_splash_timer);
+    s_splash_timer = NULL;
+  }
+  if (s_splash_watchdog) {
+    app_timer_cancel(s_splash_watchdog);
+    s_splash_watchdog = NULL;
+  }
+  if (s_splash_layer) {
+    layer_destroy(s_splash_layer);
+    s_splash_layer = NULL;
+  }
+  s_splash_active = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1107,7 +1225,10 @@ static void folder_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
 static void folder_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
                              void *callback_context) {
   if (cell_index->row == 0) {
-    timeline_open(s_folder_id, s_folder_name);
+    // "All articles": the folder's computed unread sum is the stream's real
+    // size — it pins the progress bar denominator.
+    const FeedNode *f = tree_find(s_folder_id);
+    timeline_open(s_folder_id, s_folder_name, f ? f->unread : 0);
     return;
   }
   const FeedNode *node = tree_child_node(s_folder_id, cell_index->row - 1);
@@ -1117,7 +1238,7 @@ static void folder_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
   if (node->kind == 1) {
     push_folder_window(node->id, node->name);
   } else {
-    timeline_open(node->id, node->name);
+    timeline_open(node->id, node->name, node->unread);
   }
 }
 
@@ -1445,8 +1566,9 @@ static void ctx_select_cb(MenuLayer *menu_layer, MenuIndex *cell_index,
     dialog_show_confirm_text("Mark all read?\n\nSELECT: confirm\nBACK: cancel");
   } else {
     // Refresh: timeline_open re-requests page 1 (newest first) and shows
-    // the reader.
-    timeline_open(id, name);
+    // the reader. The feed's unread count pins the progress denominator.
+    const FeedNode *f = tree_find(id);
+    timeline_open(id, name, f ? f->unread : 0);
   }
 }
 
@@ -1521,6 +1643,12 @@ static void init(void) {
   // explicit user actions (Refresh, Mark all read) still use the dialog.
   tree_load_cache();
   proto_request_tree();
+  // No cached tree: the first fetch is the whole screen. Show the app logo
+  // + "Fetching Feeds ..." until the tree arrives (ui_tree_updated hides it,
+  // a watchdog drops it if the fetch never answers).
+  if (tree_root_count() == 0) {
+    splash_show();
+  }
 }
 
 static void deinit(void) {

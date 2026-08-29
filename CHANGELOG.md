@@ -5,6 +5,16 @@
 **HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
 articles full-screen, mark read, star favourites, highlight words.
 
+**v0.3.44**
+- Startup splash: while the first fetch runs, the app logo and a
+  pulsing "Fetching Feeds ..." — no more stalled-looking blank screen
+- Long words and hyphen-joined compounds wrap with forced line breaks —
+  every heading and summary is fully visible, nothing clipped
+- The reading progress bar shows the REAL size of the folder/feed —
+  no more "100%" after the first 50 articles
+- Reading never stops at a page boundary: the next articles load on
+  demand as you read — no backing out and re-entering
+
 **v0.3.43**
 - Full touch support on touch watches (Time 2 class): swipe through
   menus, tap to open
@@ -37,6 +47,39 @@ articles full-screen, mark read, star favourites, highlight words.
 - Star favourites, unread-only mode, auto-mark-read, per-feed
   mark-all-read
 - Highlight words survive reinstalls
+
+## 0.3.44
+
+- **Startup splash.** While the very first tree fetch is in flight on
+  an empty cache, the root menu shows the app logo (the RSS fan) big
+  and centered with a pulsing "Fetching Feeds ..." instead of a
+  stalled-looking empty list. A plain layer on the main window — never
+  a pushed dialog (that raced the menu render at startup and crashed);
+  a 12 s watchdog drops it if the fetch never answers, and the arriving
+  tree or any result dismisses it.
+- **Forced line breaks for long words and hyphen-joined compounds.** The
+  reader's wrap engine now splits any token wider than the line into
+  width-fitting pieces: hyphen-joined words ("state-of-the-art") wrap
+  right after the hyphens, unbroken long words hard-break at a
+  character boundary (UTF-8 safe). Nothing is ever clipped at the right
+  edge, so long headings and summaries are fully readable.
+- **Progress bar = the real stream size.** The denominator is the
+  feed/folder unread count at open (the folder's computed sum; the
+  reading-list/starred counts), so a 300-article folder shows 1/300 —
+  not 100% after the first page. The numerator is the GLOBAL position
+  (articles evicted from the ring front + the ring index), so the bar
+  climbs monotonically instead of resetting at every page boundary.
+  Streams with no known total (the Important row) keep the loaded-page
+  fallback.
+- **Lazy loading — reading never dead-ends at a page boundary.** At the
+  end of the loaded buffer with more pages coming, DOWN fetches the
+  next page on demand, pulses and shows a "Loading..." hint at the
+  bottom, and advances the moment the next article lands — no backing
+  out and re-entering to read the rest. The prefetch of the following
+  page still starts six articles early for runway.
+- Ring buffer trimmed 64 → 60 on the 128 KB watches to hold the new
+  code inside the 64 KB virtual-size budget (still one full page plus
+  margin; the on-demand fetch covers the rest).
 
 ## 0.3.43
 

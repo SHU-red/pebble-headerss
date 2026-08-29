@@ -29,14 +29,14 @@
 //! basalt-class platforms 64 KB — bigger window on the target watch keeps
 //! more read articles re-openable in a session.
 #if defined(PBL_PLATFORM_EMERY)
-// 64 (was 68, 72 before that): .text+.data+.bss must stay <= 65535 B
-// (uint16 virtual_size). The 0.3.43 touch layer (reader gestures + root-menu
-// pull-down) pushed emery to 65505 B; 64 articles restores ~1 KB of headroom
-// at the cost of the old emery-only advantage (the touch feature is worth
-// more than 4 extra ring slots).
-#define MAX_ARTICLES 64
+// 60 (was 64, 68, 72 before that): .text+.data+.bss must stay <= 65535 B
+// (uint16 virtual_size). The 0.3.44 startup splash + wide-token line-break
+// engine pushed emery to 65969 B; 60 articles restores the headroom at the
+// cost of 4 ring slots — the on-demand page fetch (timeline) means the ring
+// never needs to hold more than a page ahead anyway.
+#define MAX_ARTICLES 60
 #elif defined(PBL_PLATFORM_GABBRO)
-#define MAX_ARTICLES 64
+#define MAX_ARTICLES 60
 #else
 // 56 on the 64 KB class: keeps heap free above ~9 KB so app_message buffers
 // (inbox 4096 + outbox 1024) and the window stack still fit at runtime.

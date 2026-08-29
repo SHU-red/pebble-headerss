@@ -11,7 +11,9 @@
 // ---------------------------------------------------------------------------
 
 //! Open (or reset and re-open) the timeline for a stream; requests page 1.
-void timeline_open(const char *stream, const char *title);
+//! `total` is the stream's article count at open (feed/folder unread count —
+//! the progress bar's real denominator); pass 0 when unknown.
+void timeline_open(const char *stream, const char *title, int32_t total);
 
 //! Item-page collect hooks, driven by proto_handle_inbox.
 void timeline_page_begin(int32_t n);

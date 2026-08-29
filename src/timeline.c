@@ -67,10 +67,17 @@ static Article s_articles[MAX_ARTICLES];
 static int32_t s_count;
 static int32_t s_page_announced; // page size announced by the phone; pins the
                                  // progress denominator until s_count passes it
+static int32_t s_total;    // stream total at open (feed/folder unread count);
+                           // 0 = unknown (falls back to the loaded window)
+static int32_t s_dropped;  // articles evicted from the ring front since open
+                           // (the ring drops the oldest as pages stream in)
 static char s_stream[48]; // current stream id
 static char s_cont[24];   // next continuation; "" = all loaded
 static bool s_loading;
 static bool s_loaded_all;
+static bool s_waiting_advance; // DOWN pressed at the buffer end: the pending
+                               // advance fires when the next page's first
+                               // article lands (seamless lazy loading)
 static char s_title[24]; // stream title (top bar)
 
 static int32_t s_idx;        // current article (ring-buffer index)
@@ -282,23 +289,34 @@ static void format_reltime(char *buf, size_t len, int32_t published) {
 // Static chrome: progress line + top bar + sidebar
 // ---------------------------------------------------------------------------
 
-//! 3 px progress line along the very top of the screen (y = 0..3), above
-//! the top bar: the read portion (left of the current position) is a full
-//! accent fill, the unread remainder stays the muted track. No position
-//! dot (0.3.35: the 8 px circle is gone — the fill edge marks the spot).
-//! Gated by the progress setting. The denominator is the larger of the
-//! announced page size (s_page_announced, set by timeline_page_begin) and
-//! the actual loaded count, so with s_count == 1 on entry the fill starts
-//! near 0 (1/50 of the page) instead of 100%.
+//! Gated by the progress setting. The denominator is the stream total at
+//! open (the feed/folder unread count — the REAL size of what the user is
+//! reading, so a 300-article folder never shows 100% at article 50); the
+//! numerator is the GLOBAL position (articles evicted from the ring front
+//! + the ring index), so the bar climbs monotonically instead of resetting
+//! at every page boundary. Unknown totals (e.g. the Important stream) fall
+//! back to the loaded window: the larger of the announced page size and
+//! the actual loaded count.
 static void progress_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   if (setting_progress() && s_count > 0) {
-    int32_t denom = s_count > s_page_announced ? s_count : s_page_announced;
+    int32_t denom;
+    int32_t pos;
+    if (s_total > 0) {
+      denom = s_total;
+      pos = s_dropped + s_idx + 1;
+      if (pos > denom) {
+        pos = denom;
+      }
+    } else {
+      denom = s_count > s_page_announced ? s_count : s_page_announced;
+      pos = s_idx + 1;
+    }
     if (denom > 0) {
       // Cap at the sidebar's left edge: the last article reaches exactly
       // the accent icon area, never hidden under it.
       int16_t max_w = (int16_t)(b.size.w - SIDEBAR_W);
-      int16_t w = (int16_t)((int32_t)(s_idx + 1) * max_w / denom);
+      int16_t w = (int16_t)(pos * max_w / denom);
       if (w < 0) {
         w = 0;
       }
@@ -317,7 +335,6 @@ static void progress_update(Layer *layer, GContext *ctx) {
     }
   }
 }
-
 //! Top bar with the stream name (starts right below the progress line).
 //! Theme-aware (P5): black crown in dark mode, white bar in light mode —
 //! the hairline divider below separates it from the page either way.
@@ -721,6 +738,122 @@ static void hl_add_ellipsis(HlLayout *lo, const char *text, GFont base_font,
   }
 }
 
+//! Engine scratch: the layout engine is single-threaded and re-layouts
+//! happen one at a time. Keeping these off the stack matters — the app
+//! stack is only 2 KB on basalt-class watches and this frame was 584 B.
+static char s_hl_scratch[HL_TOKEN_MAX + 1]; // longest slice: one hard-broken token
+static HlSpan s_hl_spans[HL_SPANS_MAX];
+
+//! End offset of the longest UTF-8-safe prefix of T[poff..pend) that fits
+//! `width` px, preferring to break right AFTER a hyphen inside the fitting
+//! prefix: long hyphenated compounds ("state-of-the-art") wrap at the
+//! hyphens instead of hard-breaking mid-word. Falls back to a character
+//! boundary when no hyphen fits. Always advances at least one full char.
+static size_t hl_piece_end(const char *t, const HlSpan *spans, int nspans,
+                           size_t poff, size_t pend, GFont base, GFont hl,
+                           int16_t width) {
+  size_t best = poff;
+  size_t k = poff;
+  while (k < pend) {
+    size_t next = k + 1;
+    while (next < pend && ((unsigned char)t[next] & 0xC0) == 0x80) {
+      next++; // UTF-8 continuation bytes: never split a character
+    }
+    int16_t w = 0;
+    HlSeg segs[HL_SEG_MAX];
+    int msegs = hl_token_segments(spans, nspans, poff, next, segs,
+                                  HL_SEG_MAX);
+    for (int s = 0; s < msegs; s++) {
+      w += hl_measure_slice(t, segs[s].off, segs[s].len,
+                            segs[s].style ? hl : base, s_hl_scratch);
+    }
+    if (w > width) {
+      break;
+    }
+    best = next;
+    k = next;
+  }
+  // Prefer the last hyphen inside the fitting prefix: "foo-bar-baz" wraps
+  // after the hyphen ("foo-", "bar-", "baz") instead of a hard character
+  // break, so the compound stays readable.
+  for (size_t j = best; j > poff; j--) {
+    if (t[j - 1] == '-') {
+      return j;
+    }
+  }
+  return best;
+}
+
+//! Emit the styled sub-segments of T[poff..pend) into the run table at the
+//! current line position, extending the open run when the style matches
+//! (else opening a new run, growing the heap table on demand). `gap` is the
+//! inter-word gap before the piece (0 at line start); `line_y` is the
+//! current line's top. Shared by the whole-token and wide-token-piece paths.
+static void hl_emit_range(HlLayout *lo, const char *t, const HlSpan *spans,
+                          int nspans, size_t poff, size_t pend,
+                          const HlBuildParams *p, int16_t gap,
+                          int16_t *line_x, bool *have_word, int *cur,
+                          int16_t *cur_w, int16_t line_y) {
+  HlSeg segs[HL_SEG_MAX];
+  int msegs = hl_token_segments(spans, nspans, poff, pend, segs, HL_SEG_MAX);
+  for (int s = 0; s < msegs; s++) {
+    size_t soff = segs[s].off;
+    size_t slen = segs[s].len;
+    uint8_t sstyle = segs[s].style;
+    GFont sf = sstyle ? p->hl_font : p->base_font;
+    int16_t sw = hl_measure_slice(t, soff, slen, sf, s_hl_scratch);
+    int16_t g = (s == 0) ? gap : 0;
+    if (*cur >= 0 && sstyle == lo->runs[*cur].style) {
+      lo->runs[*cur].len = (uint16_t)(soff + slen - lo->runs[*cur].off);
+      *line_x += g + sw;
+      *cur_w += g + sw;
+    } else {
+      if (*cur >= 0) {
+        lo->runs[*cur].w = *cur_w;
+      }
+      if (lo->n >= lo->cap) {
+        // The static table is full (a full summary needs many more runs
+        // than a preview): grow a heap array on demand. Doubling keeps
+        // the reallocation count low; the memory is freed on re-layout.
+        uint16_t new_cap = (uint16_t)(lo->cap * 2);
+        if (new_cap < 64) {
+          new_cap = 64;
+        }
+        HlRun *arr = malloc((size_t)new_cap * sizeof(HlRun));
+        if (arr) {
+          memcpy(arr, lo->runs, (size_t)lo->n * sizeof(HlRun));
+          if (lo->dyn) {
+            free(lo->runs);
+          }
+          lo->runs = arr;
+          lo->dyn = true;
+          lo->cap = new_cap;
+        } else {
+          *cur = -1;
+          *cur_w = 0;
+          *line_x += g + sw;
+          *have_word = true;
+          continue; // heap exhausted: keep the static truncation
+        }
+      }
+      {
+        *cur = lo->n;
+        HlRun *r = &lo->runs[*cur];
+        r->x = *line_x + g;
+        r->y = line_y;
+        r->off = (uint16_t)soff;
+        r->len = (uint16_t)slen;
+        r->w = 0;
+        r->style = sstyle;
+        lo->n++;
+        *cur_w = sw;
+      }
+      *line_x += g + sw;
+      *have_word = true;
+    }
+  }
+}
+
 //! Layout pass: word-wrap the text into a cached run table. Hard newlines
 //! break lines; whitespace collapses to single-space gaps; with max_lines >
 //! 0 overflowing text is cut with a trailing ellipsis.
@@ -744,11 +877,12 @@ static void hl_build_layout(const HlBuildParams *p) {
 
   int16_t base_space = hl_measure_text(" ", p->base_font);
   int16_t hl_space = hl_measure_text(" ", p->hl_font);
-  // Static scratch: the engine is single-threaded and re-layouts happen one
-  // at a time. Keeping these off the stack matters — the app stack is only
-  // 2 KB on basalt-class watches and this frame was 584 B.
-  static char scratch[HL_TOKEN_MAX + 1]; // longest slice: one hard-broken token
-  static HlSpan spans[HL_SPANS_MAX];
+  // Engine scratch lives at file scope (s_hl_scratch / s_hl_spans): the
+  // engine is single-threaded and re-layouts happen one at a time, and
+  // keeping them off the stack matters — the app stack is only 2 KB on
+  // basalt-class watches and this frame was 584 B.
+  char *scratch = s_hl_scratch;
+  HlSpan *spans = s_hl_spans;
 
   int nspans = hl_collect_spans(t, spans, HL_SPANS_MAX);
 
@@ -821,7 +955,8 @@ static void hl_build_layout(const HlBuildParams *p) {
     if (have_word) {
       gap_w = (int16_t)(gap_chars * (segs[0].style ? hl_space : base_space));
     }
-    if (have_word && line_x + gap_w + tw > p->width) {
+    if (have_word && line_x + gap_w + tw > p->width && tw <= p->width) {
+      // The token fits on a fresh line: wrap it there whole.
       if (p->max_lines > 0 &&
           line_y + lo->line_h >= (int16_t)(p->max_lines * lo->line_h)) {
         truncated = true; // wrapping would exceed the cap
@@ -837,62 +972,63 @@ static void hl_build_layout(const HlBuildParams *p) {
       line_y += lo->line_h;
       gap_w = 0;
     }
-    // Emit the segments: extend the open run when the style matches, else
-    // open a new run (or fold into nothing when the table is full).
-    for (int s = 0; s < msegs; s++) {
-      size_t soff = segs[s].off;
-      size_t slen = segs[s].len;
-      uint8_t sstyle = segs[s].style;
-      GFont sf = sstyle ? p->hl_font : p->base_font;
-      int16_t sw = hl_measure_slice(t, soff, slen, sf, scratch);
-      int16_t gap = (s == 0 && have_word) ? gap_w : 0;
-      if (cur >= 0 && sstyle == lo->runs[cur].style) {
-        lo->runs[cur].len = (uint16_t)(soff + slen - lo->runs[cur].off);
-        line_x += gap + sw;
-        cur_w += gap + sw;
-      } else {
-        if (cur >= 0) {
-          lo->runs[cur].w = cur_w;
-        }
-        if (lo->n >= lo->cap) {
-          // The static table is full (a full summary needs many more runs
-          // than a preview): grow a heap array on demand. Doubling keeps
-          // the reallocation count low; the memory is freed on re-layout.
-          uint16_t new_cap = (uint16_t)(lo->cap * 2);
-          if (new_cap < 64) {
-            new_cap = 64;
+    if (tw <= p->width) {
+      // Normal token: emit the segments whole.
+      hl_emit_range(lo, t, spans, nspans, woff, wend, p,
+                    have_word ? gap_w : 0, &line_x, &have_word, &cur,
+                    &cur_w, line_y);
+    } else {
+      // A token WIDER than the line (a long word, or several words joined
+      // by hyphens): split it into width-fitting pieces so the whole text
+      // stays visible — long hyphenated compounds wrap at the hyphens
+      // ("state-of-the-" / "art"), everything else hard-breaks at a
+      // character boundary. The first piece may sit on the current line
+      // when it fits after the gap; the rest each start a fresh line.
+      // Nothing is ever clipped at the right edge.
+      size_t poff = woff;
+      while (poff < wend) {
+        size_t pend = hl_piece_end(t, spans, nspans, poff, wend,
+                                   p->base_font, p->hl_font, p->width);
+        if (pend <= poff) {
+          // One glyph is wider than the line: still advance a full char
+          // (the piece will overhang by design; it must not loop forever).
+          pend = poff + 1;
+          while (pend < wend && ((unsigned char)t[pend] & 0xC0) == 0x80) {
+            pend++;
           }
-          HlRun *arr = malloc((size_t)new_cap * sizeof(HlRun));
-          if (arr) {
-            memcpy(arr, lo->runs, (size_t)lo->n * sizeof(HlRun));
-            if (lo->dyn) {
-              free(lo->runs);
-            }
-            lo->runs = arr;
-            lo->dyn = true;
-            lo->cap = new_cap;
-          } else {
+        }
+        HlSeg psegs[HL_SEG_MAX];
+        int mpsegs = hl_token_segments(spans, nspans, poff, pend, psegs,
+                                       HL_SEG_MAX);
+        int16_t pw = 0;
+        for (int s = 0; s < mpsegs; s++) {
+          pw += hl_measure_slice(t, psegs[s].off, psegs[s].len,
+                                 psegs[s].style ? p->hl_font : p->base_font,
+                                 scratch);
+        }
+        int16_t pgap = have_word ? gap_w : 0;
+        if (have_word && line_x + pgap + pw > p->width) {
+          if (p->max_lines > 0 &&
+              line_y + lo->line_h >= (int16_t)(p->max_lines * lo->line_h)) {
+            truncated = true; // the piece would exceed the cap
+            break;
+          }
+          if (cur >= 0) {
+            lo->runs[cur].w = cur_w;
             cur = -1;
             cur_w = 0;
-            line_x += gap + sw;
-            have_word = true;
-            continue; // heap exhausted: keep the static truncation
           }
+          have_word = false;
+          line_x = 0;
+          line_y += lo->line_h;
+          pgap = 0;
         }
-        {
-          cur = lo->n;
-          HlRun *r = &lo->runs[cur];
-          r->x = line_x + gap;
-          r->y = line_y;
-          r->off = (uint16_t)soff;
-          r->len = (uint16_t)slen;
-          r->w = 0;
-          r->style = sstyle;
-          lo->n++;
-          cur_w = sw;
-        }
-        line_x += gap + sw;
-        have_word = true;
+        hl_emit_range(lo, t, spans, nspans, poff, pend, p, pgap,
+                      &line_x, &have_word, &cur, &cur_w, line_y);
+        poff = pend;
+      }
+      if (truncated) {
+        break; // the cap cut the token mid-word
       }
     }
   }
@@ -1154,12 +1290,23 @@ static void end_bar_update(Layer *layer, GContext *ctx) {
   if (s_count == 0 || !cur_page() || !cur_page()->content) {
     return;
   }
+  GRect b = layer_get_bounds(layer);
+  if (s_waiting_advance) {
+    // A boundary DOWN started the next-page fetch: feedback that the press
+    // was received and the reader will continue as soon as data arrives.
+    graphics_context_set_text_color(ctx, s_accent);
+    graphics_draw_text(ctx, "Loading...",
+                       fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                       GRect(b.origin.x, b.origin.y, b.size.w, b.size.h),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter,
+                       NULL);
+    return;
+  }
   const Page *p = cur_page();
   bool long_article = (p->content_h > s_view_h + 8); // a real scroll area
   if (!long_article) {
     return;
   }
-  GRect b = layer_get_bounds(layer);
   if (s_scroll_mode) {
     int32_t off = layer_get_frame(p->content).origin.y;
     if (off > page_scroll_min(p) + 2) {
@@ -1708,8 +1855,27 @@ static void maybe_advance(void) {
     return;
   }
   if (s_idx + 1 >= s_count) {
+    // Buffer end. With more pages coming, fetch the next page on demand and
+    // hold the advance until its first article lands (timeline_collect_article
+    // delivers it) — the reader never dead-ends at a page boundary, so the
+    // user never has to back out and re-enter to keep reading. At the true
+    // end the pulse confirms there is nothing after.
+    if (!s_loaded_all) {
+      if (!s_loading) {
+        s_loading = true;
+        proto_request_items(s_stream, s_cont);
+      }
+      s_waiting_advance = true;
+      vibes_short_pulse(); // the press was received: more is on the way
+      if (s_end_bar) {
+        layer_mark_dirty(s_end_bar); // "Loading..." hint
+      }
+      return;
+    }
     APP_LOG(APP_LOG_LEVEL_INFO, "nav: advance blocked (last article %ld/%ld)",
             (long)s_idx, (long)s_count);
+    vibes_short_pulse();
+    return;
   }
   transition_to(1);
 }
@@ -1722,6 +1888,7 @@ static void maybe_regress(void) {
   if (s_count == 0) {
     return;
   }
+  s_waiting_advance = false; // going back: drop the pending boundary advance
   transition_to(-1);
 }
 
@@ -2554,10 +2721,10 @@ static void timeline_window_unload(Window *window) {
   s_tl_window = NULL;
 }
 
-//! Open (or reset and re-open) the timeline for a stream. State is reset and
-//! the first page is requested; a full-screen "Loading..." is shown until
-//! the first article arrives.
-void timeline_open(const char *stream, const char *title) {
+//! the first article arrives. `total` is the stream's article count at open
+//! (the feed/folder unread count — the progress bar's real denominator);
+//! pass 0 when unknown (the bar then falls back to the loaded window).
+void timeline_open(const char *stream, const char *title, int32_t total) {
   if (s_tl_window) {
     window_stack_remove(s_tl_window, true);
   }
@@ -2565,6 +2732,9 @@ void timeline_open(const char *stream, const char *title) {
   snprintf(s_title, sizeof(s_title), "%s", title ? title : "");
   s_count = 0;
   s_page_announced = 0; // the next page_begin pins the progress denominator
+  s_total = total > 0 ? total : 0;
+  s_dropped = 0;
+  s_waiting_advance = false;
   s_cont[0] = '\0';
   s_loading = true;
   s_loaded_all = false;
@@ -2597,6 +2767,7 @@ void timeline_page_begin(int32_t n) {
   if (s_count + need > MAX_ARTICLES) {
     int32_t drop = s_count + need - MAX_ARTICLES;
     if (drop >= s_count) {
+      s_dropped += s_count; // every buffered article moved past the reader
       s_count = 0;
       s_idx = 0;
       full_summary_reset(); // everything dropped: the buffered text is gone
@@ -2606,6 +2777,7 @@ void timeline_page_begin(int32_t n) {
         s_pages[i].idx = -1;
       }
     } else {
+      s_dropped += drop; // the evicted oldest are read-and-passed articles
       memmove(s_articles, &s_articles[drop],
               (size_t)(s_count - drop) * sizeof(Article));
       s_count -= drop;
@@ -2661,6 +2833,7 @@ void timeline_collect_article(DictionaryIterator *iter) {
   }
   bool first = (s_count == 0);
   if (s_count >= MAX_ARTICLES) {
+    s_dropped++; // one article moved past the reader (the ring's front)
     memmove(s_articles, &s_articles[1], (size_t)(s_count - 1) * sizeof(Article));
     s_count--;
     if (s_idx > 0) {
@@ -2728,6 +2901,13 @@ void timeline_collect_article(DictionaryIterator *iter) {
     full_summary_apply(); // heal: apply a completed fetch if missed earlier
     timeline_prefetch_check();
   }
+  // The user pressed DOWN at the end of the loaded buffer while the next
+  // page streamed in: the moment a fresh article is in the ring, deliver
+  // the held advance — exactly one step, no fast-forward through the page.
+  if (s_waiting_advance && !s_advancing && s_idx + 1 < s_count) {
+    s_waiting_advance = false;
+    transition_to(1);
+  }
 }
 
 //! The page ended: store the continuation ("", = no more items), release the
@@ -2736,6 +2916,14 @@ void timeline_page_end(const char *cont) {
   snprintf(s_cont, sizeof(s_cont), "%s", cont ? cont : "");
   s_loaded_all = (s_cont[0] == '\0');
   s_loading = false;
+  if (s_waiting_advance) {
+    // The on-demand page delivered nothing new (empty/errored fetch): drop
+    // the wait so the "Loading..." hint clears; a further DOWN re-fetches.
+    s_waiting_advance = false;
+    if (s_end_bar) {
+      layer_mark_dirty(s_end_bar);
+    }
+  }
 
   if (!s_tl_window) {
     return;
