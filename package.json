@@ -1,7 +1,7 @@
 {
   "name": "pebble-headerss",
   "author": "SHU-red",
-  "version": "0.3.44",
+  "version": "0.3.45",
   "keywords": [
     "pebble-app",
     "freshrss",
@@ -63,6 +63,7 @@
       "DarkMode",
       "TouchEnabled",
       "UnreadOnly",
+      "ServerType",
       "HighlightWords",
       "FullSummary",
       "SummaryLast",

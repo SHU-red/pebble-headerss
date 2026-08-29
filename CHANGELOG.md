@@ -5,6 +5,13 @@
 **HeadeRSS** — FreshRSS on your wrist: browse your feed tree, read
 articles full-screen, mark read, star favourites, highlight words.
 
+**v0.3.45**
+- New: Miniflux support — pick your server type in the phone
+  settings: FreshRSS (default) or Miniflux's Google Reader API
+- Same features either way: feed/folder tree, unread counts, reading
+  articles full-screen, mark read/unread, star favourites, mark all
+  read
+
 **v0.3.44**
 - Startup splash: while the first fetch runs, the app logo and a
   pulsing "Fetching Feeds ..." — no more stalled-looking blank screen
@@ -47,6 +54,21 @@ articles full-screen, mark read, star favourites, highlight words.
 - Star favourites, unread-only mode, auto-mark-read, per-feed
   mark-all-read
 - Highlight words survive reinstalls
+
+## 0.3.45
+
+- **Miniflux support.** The connection settings gained a "Server
+  type" selector: FreshRSS stays the default, and Miniflux now works
+  through its Google Reader-compatible API. The dedicated client
+  handles authentication, feed/folder browsing, unread counts,
+  article contents, mark read/unread, starring and mark-all-read —
+  with a couple of Miniflux-specific quirks handled (no
+  `/api/greader.php` prefix, GET vs POST auth, label-based folders,
+  per-feed unread badges derived from the item stream). Purely a
+  phone-side (JS) addition — no watch-side protocol changes.
+- **Config key registration.** The new `ServerType` setting is a
+  registered AppMessage key, so Clay's save message round-trips to
+  the watch cleanly on every phone app.
 
 ## 0.3.44
 
