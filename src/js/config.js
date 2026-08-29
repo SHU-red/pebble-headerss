@@ -6,11 +6,10 @@
  * package.json so Clay sends their values to the watch on save. The reading
  * options (auto-mark mode, unread-only, smart-surface toggles) live on the
  * WATCH in the sub-menu and are not part of this page. The connection
- * fields (ServerUrl, User, ApiPass) are phone-side only: Clay persists them
- * in 'clay-settings' for prefill and the JS keeps a working copy in
- * localStorage; they never round-trip to the watch.
+ * fields (ServerType, ServerUrl, User, ApiPass) are phone-side only: Clay
+ * persists them in 'clay-settings' for prefill and the JS keeps a working
+ * copy in localStorage; they never round-trip to the watch.
  */
-
 module.exports = [
   {
     'type': 'heading',
@@ -24,11 +23,21 @@ module.exports = [
         'defaultValue': 'Connection'
       },
       {
+        'type': 'select',
+        'messageKey': 'ServerType',
+        'label': 'Server type',
+        'options': [
+          { 'label': 'FreshRSS', 'value': 'freshrss' },
+          { 'label': 'Miniflux', 'value': 'miniflux' }
+        ],
+        'defaultValue': 'freshrss'
+      },
+      {
         'type': 'input',
         'messageKey': 'ServerUrl',
-        'label': 'FreshRSS URL',
+        'label': 'Server URL',
         'attributes': {
-          'placeholder': 'http://192.168.178.55:8080'
+          'placeholder': 'https://rss.example.com'
         }
       },
       {
@@ -40,11 +49,11 @@ module.exports = [
       {
         'type': 'input',
         'messageKey': 'ApiPass',
-        'label': 'API password',
+        'label': 'Google Reader / API password',
         'attributes': {
           'type': 'password'
         },
-        'description': 'FreshRSS profile → API password, NOT the login password'
+        'description': 'FreshRSS: profile API password. Miniflux: Google Reader integration password.'
       }
     ]
   },
